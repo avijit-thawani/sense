@@ -287,6 +287,10 @@ def main():
     s.write(SIZES[size])
     time.sleep(0.3)
     s.reset_input_buffer()
+    from orclient import ENV
+    if not ENV.get("OPENROUTER_API_KEY", "").startswith("sk-or-"):
+        print("\n  No OpenRouter key yet: photos work, but nothing will be described or spoken.\n"
+              "  Paste your key into .env (GETTING_STARTED.md, step 6e), then restart.\n")
     print(f"Ready ({MODEL}, spent so far ${spent_usd():.4f}).")
     print(f"Space = once, l = live on/off, r = resolution, c = context ({mode}), "
           f"e = brighten ({'on' if enhance_method else 'off'}), q = quit.")

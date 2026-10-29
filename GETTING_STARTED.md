@@ -15,7 +15,8 @@ should see.
   has USB-C ports, use a USB-C to micro-USB cable, or a USB-C adapter.
 - **A laptop** (Mac or Windows) with internet, and **Claude** with access to a terminal on that
   laptop (Claude Code, or Claude in Cursor).
-- **An OpenRouter key** for the vision model. Ask Avi; it costs about ₹1 per minute of use.
+- **An OpenRouter key.** Without it, everything works up to the first photo, but nothing will
+  talk. See step 6e for how to get one (about ₹1 per minute of use).
 - Later, optional: an Android phone and Bluetooth earphones.
 
 ## 2. Nothing you do here can permanently break the board
@@ -99,10 +100,32 @@ You should hear back "CAMERA OK".
 Point the camera at something first. The photo is small (640×480) and may look dim; that is
 normal for this camera indoors.
 
-**6e. Hear it talk**
+**6e. Hear it talk (needs an OpenRouter key)**
 
-> Set up .env from .env.example with this OpenRouter key: (paste the key Avi gave you). Then
-> open a terminal window where I can type and start tools/describe.py in it.
+The camera's photos are described by an AI model on the internet. OpenRouter is the service
+that runs it, and the **key** is like a password that lets this project use your account.
+
+*Getting a key* (skip if Avi gave you one):
+
+1. Go to [openrouter.ai](https://openrouter.ai) and sign in (Google sign-in is fine).
+2. Open **Credits** and add a small amount, e.g. $5. That is several hours of use.
+3. Open **Keys**, click **Create Key**, name it `sense`, and set a **credit limit** of $5 so it
+   can never spend more.
+4. Copy the key. It starts with `sk-or-`. It is shown only once; if you lose it, make a new one.
+
+*Treat the key like a password:* don't post it in chats, emails or screenshots, and never put
+it into GitHub. The file it goes into (`.env`) is set up so it is never uploaded.
+
+*Putting the key in place.* Ask Claude:
+
+> Create .env from .env.example and open it in a text editor for me. Don't put the key in
+> yourself; I'll paste it.
+
+In the file that opens, paste your key right after `OPENROUTER_API_KEY=` with no spaces, so the
+line looks like `OPENROUTER_API_KEY=sk-or-v1-…`. Save and close. Then ask Claude:
+
+> Check that .env has an OpenRouter key without showing it to me, then open a terminal window
+> where I can type and start tools/describe.py in it.
 
 In that window, press **l** (lowercase L) to start. Point the camera around the room: every
 second or two you'll hear a few words, like "Laptop screen ahead. Water bottle right." Press
@@ -123,6 +146,9 @@ Send that video to Avi. Your recordings stay on your laptop; they are not upload
 | Claude can't find the board | Almost always a charge-only cable. On Windows, ask Claude to install the "CH340" driver. |
 | Upload stuck on "Connecting…" | Ask Claude to retry. If it still sticks: hold **IO0**, tap **RST**, let go of IO0, retry. |
 | "CAMERA NOT FOUND" | Unplug the USB cable first, then check the orange ribbon is pushed in flat. Send Avi a photo before doing anything more. |
+| "OPENROUTER_API_KEY" error, or nothing is spoken | The key is missing from `.env`, has a space or quotes around it, or has run out of credit. Step 6e. |
+| "HTTP 401" or "HTTP 402" | 401: the key is wrong; make a new one. 402: add credit on openrouter.ai. |
+| "spend cap reached" | The project's own safety limit (`SENSE_BUDGET_USD` in `.env`, $1 by default). Ask Claude to raise it. |
 | It talks about things that aren't there | The room may be too dark. Turn on a light. |
 | It's quiet for a while | It only speaks about new things. Point it somewhere else. |
 
@@ -162,6 +188,8 @@ arduino-cli monitor -p <PORT> -c baudrate=115200      # blink prints "hello from
 
 - `firmware/camcheck` prints `CAMERA OK: sensor id 0x26` at 115200 baud.
 - `firmware/snap` talks at **460800** baud: `tools/snap.py out.jpg` takes one photo.
+- The OpenRouter key lives only in `.env` (gitignored). Never write, print or echo it; let the
+  user paste it into the file. To check it exists: `grep -c '^OPENROUTER_API_KEY=sk-or-' .env`.
 - `tools/describe.py` needs an interactive terminal (it reads single keys): open one for the
   user rather than running it yourself. On a Mac it speaks through `tools/speak_server.py`;
   on Windows it uses the built-in PowerShell voice.

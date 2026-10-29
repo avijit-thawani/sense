@@ -7,7 +7,9 @@ A small camera that describes the world to a blind person through earphones. A t
 board with a camera takes a photo every second or two; a phone (or laptop) sends it to a fast
 vision model and speaks a few words: "Person ahead, close. Chair left."
 
-**New here? Start with [GETTING_STARTED.md](GETTING_STARTED.md).**
+**New here? Start with [GETTING_STARTED.md](GETTING_STARTED.md).** You'll need the camera kit,
+a micro-USB data cable, a laptop, and an [OpenRouter](https://openrouter.ai) key (the AI that
+describes the photos; about ₹1 per minute).
 
 ![first walk with the phone app](docs/media/phone-walk-preview.webp)
 

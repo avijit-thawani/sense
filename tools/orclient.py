@@ -54,6 +54,9 @@ def describe(jpeg, prompt, model=MODEL, extra=None, log=None):
 
 def call(content, model, body=None, log=None, timeout=30):
     """One chat request with the spend cap and ledger. Returns (text, seconds, cost_usd)."""
+    if not ENV.get("OPENROUTER_API_KEY", "").startswith("sk-or-"):
+        raise RuntimeError("OPENROUTER_API_KEY missing: paste your OpenRouter key into .env "
+                           "(see GETTING_STARTED.md, step 6e)")
     if spent_usd() >= BUDGET_USD:
         raise RuntimeError(f"spend cap ${BUDGET_USD} reached; raise SENSE_BUDGET_USD in sense/.env")
     body = {"model": model, "messages": [{"role": "user", "content": content}], **(body or {})}
