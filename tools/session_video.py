@@ -95,9 +95,36 @@ def wrap(draw, text, f, width):
     return lines + [line]
 
 
-def frame(t, events, t0, photos, title):
+GAP_MAX_S = 6.0     # idle stretches longer than this (no photo, no speech) are cut
+GAP_SHOW_S = 1.5    # ... down to this, with a "skipped" note
+
+
+def cut_idle(events):
+    """Shortens long idle gaps (e.g. one test photo, then the real run a minute later).
+    Timing inside each stretch is untouched. Returns [(video time, seconds skipped)]."""
+    skips, shift, prev_end = [], 0.0, None
+    for e in sorted(events, key=lambda e: e["captured"]):
+        for k in ("captured", "answered", "launched", "spoke"):
+            e[k] -= shift
+        if prev_end is not None and e["captured"] - prev_end > GAP_MAX_S:
+            cut = e["captured"] - prev_end - GAP_SHOW_S
+            for k in ("captured", "answered", "launched", "spoke"):
+                e[k] -= cut
+            shift += cut
+            skips.append((prev_end, cut))
+        prev_end = max(prev_end or 0, e["captured"], e["spoke"] + e["dur"])
+    return skips
+
+
+def frame(t, events, t0, photos, title, skips=()):
     img = Image.new("RGB", (W, H), (16, 16, 20))
     d = ImageDraw.Draw(img)
+    for start, cut in skips:
+        if start <= t < start + GAP_SHOW_S:
+            d.rectangle((0, 0, W, H), fill=(16, 16, 20))
+            d.text((80, 320), f"... {cut:.0f} s with no photos skipped ...", font=font(40, True),
+                   fill=(200, 200, 200))
+            return img
     shown = [e for e in events if e["captured"] <= t]
     if shown:
         img.paste(photos[shown[-1]["photo"]], (0, 0))
@@ -156,7 +183,10 @@ def main():
     events = tts(events, tmp)
     if len(events) < n_answers:
         print(f"{n_answers - len(events)} answers dropped while the speaker was busy (as live)")
-    t0 = events[0]["captured"] - INTRO_S - 0.5
+    skips = cut_idle(events)
+    for start, cut in skips:
+        print(f"cut {cut:.0f} s of idle time")
+    t0 = min(e["captured"] for e in events) - INTRO_S - 0.5
     t_end = max(e["spoke"] + e["dur"] for e in events) + 1.5
     photos = {e["photo"]: Image.open(e["photo"]).convert("RGB").resize((960, 720)) for e in events}
 
@@ -166,7 +196,7 @@ def main():
                            "-pix_fmt", "yuv420p", video], stdin=subprocess.PIPE)
     n = int((t_end - t0) * FPS)
     for i in range(n):
-        ff.stdin.write(frame(t0 + i / FPS, events, t0, photos, title).tobytes())
+        ff.stdin.write(frame(t0 + i / FPS, events, t0, photos, title, skips).tobytes())
     ff.stdin.close()
     ff.wait()
 

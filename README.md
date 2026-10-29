@@ -11,7 +11,7 @@ vision model and speaks a few words: "Person ahead, close. Chair left."
 
 ![first walk with the phone app](docs/media/phone-walk-preview.webp)
 
-[Full video with sound](docs/media/phone-walk.mp4) (83 s): the first walk with the phone app.
+[Full video with sound](docs/media/phone-walk.mp4) (40 s): the first walk with the phone app. Idle stretches longer than 6 s are cut to a short "skipped" card.
 Left, each photo as it was taken; right, what was being spoken and how long ago that photo
 was taken (about 1.9 s); bottom, the words heard. A video model's review of it is in
 [phone-walk.judge.json](docs/media/phone-walk.judge.json) (8/10).
@@ -84,7 +84,7 @@ a video model review it before sharing:
 
 Video format, the same every time so videos compare side by side: 1280×720; left, the photo as
 taken with a timer; right, the photo being described and how its delay split (camera, model,
-waiting, voice start); bottom, the spoken words while they are spoken.
+waiting, voice start); bottom, the spoken words while they are spoken. Idle gaps over 6 s (no photo, no speech) are cut to 1.5 s.
 
 Phone sessions: `adb pull /sdcard/Android/data/com.sense.app/files/sessions/ sessions-phone/`.
 
