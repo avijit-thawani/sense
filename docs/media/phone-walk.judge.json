@@ -1,0 +1,111 @@
+{
+ "phrases": [
+  {
+   "t": 5.4,
+   "said": "\"THE BELL JAR PLATH\" book left. Black case center.",
+   "verdict": "correct",
+   "note": "Accurately reads the book title/author and identifies the black pouch."
+  },
+  {
+   "t": 54.4,
+   "said": "Blinds center. Lamp right.",
+   "verdict": "correct",
+   "note": "Correctly identifies window blinds and floor lamp."
+  },
+  {
+   "t": 55.4,
+   "said": "Floor lamp center. Bed right.",
+   "verdict": "correct",
+   "note": "Correctly identifies floor lamp and bed."
+  },
+  {
+   "t": 57.4,
+   "said": "Pillow left. Bed frame right.",
+   "verdict": "correct",
+   "note": "Matches the bedding on left and headboard/bed frame on right."
+  },
+  {
+   "t": 59.4,
+   "said": "Headboard ahead.",
+   "verdict": "correct",
+   "note": "Accurately identifies the upholstered headboard."
+  },
+  {
+   "t": 61.4,
+   "said": "Pink book center. White box center.",
+   "verdict": "correct",
+   "note": "Identifies the pink book and white power brick."
+  },
+  {
+   "t": 63.4,
+   "said": "Laptop screen right. Red book back.",
+   "verdict": "correct",
+   "note": "Identifies the open laptop and the book in the background."
+  },
+  {
+   "t": 64.4,
+   "said": "Smartphone, center left. Cables, center.",
+   "verdict": "correct",
+   "note": "Accurately locates the smartphone and red/black cables on the desk."
+  },
+  {
+   "t": 67.4,
+   "said": "Charging cables center. Laptop keyboard right.",
+   "verdict": "correct",
+   "note": "Accurately describes the close-up view of the desk."
+  },
+  {
+   "t": 70.4,
+   "said": "Bottle center. Dark object right.",
+   "verdict": "vague",
+   "note": "Identifies toiletries bottle, calls the black water bottle 'dark object'."
+  },
+  {
+   "t": 72.4,
+   "said": "Laptop screen center. Power bank left.",
+   "verdict": "wrong",
+   "note": "Calls the MacBook power adapter a 'power bank'."
+  },
+  {
+   "t": 74.4,
+   "said": "Power adapter left.",
+   "verdict": "correct",
+   "note": "Correctly identifies the power adapter on the left."
+  },
+  {
+   "t": 77.4,
+   "said": "\"Elise\" bottle center. White items left.",
+   "verdict": "correct",
+   "note": "Accurately reads the text on the bottle and notes items on the left."
+  },
+  {
+   "t": 79.4,
+   "said": "Toiletries left. Table surface.",
+   "verdict": "correct",
+   "note": "Accurately categorizes the small bottles on the left."
+  },
+  {
+   "t": 81.4,
+   "said": "Black bottle \"Elise\" center.",
+   "verdict": "correct",
+   "note": "Accurately describes the bottle and its text."
+  }
+ ],
+ "missed": [
+  {
+   "t": 5.4,
+   "what": "Remote control and power strip on the desk"
+  },
+  {
+   "t": 62.4,
+   "what": "Amazon Prime mailer package on the desk"
+  }
+ ],
+ "verbosity": 1,
+ "timeliness": 5,
+ "usefulness": 8,
+ "summary": "The system provides very fast, terse, and accurate descriptions of indoor objects and furniture, including reading text on a book cover and a water bottle. It maintains low latency (~1.5-2s) and avoids repeating itself during a long stationary period.",
+ "model": "google/gemini-4-argon",
+ "cost_usd": 0.028214,
+ "seconds": 18.5
+}

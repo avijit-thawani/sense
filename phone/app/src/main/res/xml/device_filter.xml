@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- CH340 USB-serial chip on the ESP32-CAM-MB adapter (vendor 0x1A86, product 0x7523). -->
+<resources>
+    <usb-device vendor-id="6790" product-id="29987" />
+</resources>

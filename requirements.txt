@@ -1,0 +1,5 @@
+esptool
+pyserial
+pillow
+requests
+pyobjc-framework-Cocoa; sys_platform == "darwin"
