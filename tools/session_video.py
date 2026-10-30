@@ -56,18 +56,27 @@ def load(folder):
                        "spoke_logged": spoken_at.get(r["photo"]),
                        "audio_logged": audio_at.get(r["photo"]),
                        "text": r.get("spoken_text") or r["text"],
-                       "question": r.get("question") if r.get("mode") == "ask" else None})
+                       "question": r.get("question") if r.get("mode") == "ask" else None,
+                       # hold-to-ask timing (phone builds after Oct 30 10:55): press, release, transcript
+                       **{k: secs(dt.datetime.fromisoformat(r[k + "_at"])) if r.get(k + "_at") else None
+                          for k in ("press", "release", "stt")}})
     return events
 
 
 def question_audio(events, tmp):
-    """The user's question in a second voice, from the moment they pressed (photo taken)."""
+    """The user's question in a second voice, starting at the press. With press and release logged,
+    the speaking rate is set so the re-voiced question lasts as long as the real hold."""
     for i, e in enumerate(events):
         if not e["question"]:
             continue
+        rate = 200
+        if e["press"] is not None and e["release"] is not None and e["release"] > e["press"]:
+            words = len(e["question"].split())
+            rate = int(min(330, max(110, words * 60 / max(e["release"] - e["press"] - 0.4, 0.5))))
         aiff = os.path.join(tmp, f"q{i}.aiff")
-        subprocess.run(["say", "-v", QUESTION_VOICE, "-r", "200", "-o", aiff, e["question"]], check=True)
+        subprocess.run(["say", "-v", QUESTION_VOICE, "-r", str(rate), "-o", aiff, e["question"]], check=True)
         e["q_audio"] = aiff
+        e["q_start"] = (e["press"] if e["press"] is not None else e["captured"]) + 0.3
 
 
 def tts(events, tmp):
@@ -119,11 +128,13 @@ def cut_idle(events):
     Timing inside each stretch is untouched. Returns [(video time, seconds skipped)]."""
     skips, shift, prev_end = [], 0.0, None
     for e in sorted(events, key=lambda e: e["captured"]):
-        for k in ("captured", "answered", "launched", "spoke"):
+        keys = [k for k in ("captured", "answered", "launched", "spoke", "press", "release", "stt", "q_start")
+                if e.get(k) is not None]
+        for k in keys:
             e[k] -= shift
         if prev_end is not None and e["captured"] - prev_end > GAP_MAX_S:
             cut = e["captured"] - prev_end - GAP_SHOW_S
-            for k in ("captured", "answered", "launched", "spoke"):
+            for k in keys:
                 e[k] -= cut
             shift += cut
             skips.append((prev_end, cut))
@@ -143,8 +154,9 @@ def frame(t, events, t0, photos, title, skips=()):
     shown = [e for e in events if e["captured"] <= t]
     if shown:
         img.paste(photos[shown[-1]["photo"]], (0, 0))
-        d.rectangle((12, 12, 190, 46), fill=(0, 0, 0))
-        d.text((22, 18), f"camera  {t - t0:5.1f}s", font=font(20), fill=(255, 255, 255))
+        d.rectangle((12, 12, 220, 46), fill=(0, 0, 0))
+        # restarts at every new photo (in hold-to-ask, every press)
+        d.text((22, 18), f"photo taken  {t - shown[-1]['captured']:4.1f}s", font=font(20), fill=(255, 255, 255))
     # side panel: what the user is hearing, and which photo it describes
     x = 980
     d.text((x, 20), "Now speaking", font=font(22, True), fill=(255, 210, 90))
@@ -154,17 +166,26 @@ def frame(t, events, t0, photos, title, skips=()):
         d.text((x, 52), f"photo taken {t - e['captured']:.1f}s ago",
                font=font(16), fill=(200, 200, 200))
         img.paste(photos[e["photo"]].resize((280, 210)), (x, 80))
-        other = e["answered"] - e["captured"] - e["camera_s"] - e["model_s"]
-        steps = [("camera", e["camera_s"]), ("model", e["model_s"]),
-                 ("queued behind speech", e["launched"] - e["answered"]),
-                 ("voice startup", e["spoke"] - e["launched"])]
-        if other > 0.05:
-            steps.insert(1, ("you speaking" if e["question"] else "other", other))
+        if e["question"] and e["release"] is not None and e["press"] is not None:
+            stt = (e["stt"] or e["release"])
+            steps = [("you speaking", e["release"] - e["press"]),
+                     ("speech-to-text", stt - e["release"]),
+                     ("model", e["model_s"]),
+                     ("voice startup", e["spoke"] - e["answered"])]
+            total = ("release to voice", e["spoke"] - e["release"])
+        else:
+            other = e["answered"] - e["captured"] - e["camera_s"] - e["model_s"]
+            steps = [("camera", e["camera_s"]), ("model", e["model_s"]),
+                     ("queued behind speech", e["launched"] - e["answered"]),
+                     ("voice startup", e["spoke"] - e["launched"])]
+            if other > 0.05:
+                steps.insert(1, ("you speaking (est.)" if e["question"] else "other", other))
+            total = ("photo to voice", e["spoke"] - e["captured"])
         for i, (label, s) in enumerate(steps):
             d.text((x, 298 + 20 * i), f"{label:<22}", font=font(15), fill=(170, 170, 170))
             d.text((x + 200, 298 + 20 * i), f"{s:4.1f}s", font=font(15), fill=(170, 170, 170))
-        d.text((x, 302 + 20 * len(steps)), "photo to voice", font=font(15, True), fill=(230, 230, 230))
-        d.text((x + 200, 302 + 20 * len(steps)), f"{e['spoke'] - e['captured']:4.1f}s",
+        d.text((x, 302 + 20 * len(steps)), total[0], font=font(15, True), fill=(230, 230, 230))
+        d.text((x + 200, 302 + 20 * len(steps)), f"{total[1]:4.1f}s",
                font=font(15, True), fill=(230, 230, 230))
         cap = font(34, True)
         lines = wrap(d, e["text"], cap, W - 80)
@@ -232,7 +253,7 @@ def main():
     for e in events:
         tracks.append((e["audio"], e["spoke"]))
         if e.get("q_audio"):
-            tracks.append((e["q_audio"], e["captured"] + 0.3))
+            tracks.append((e["q_audio"], e["q_start"]))
     for i, (path, start) in enumerate(tracks):
         inputs += ["-i", path]
         ms = int((start - t0) * 1000)

@@ -13,13 +13,12 @@ describes the photos; about ₹1 per minute).
 
 ![hold to ask on the phone](docs/media/phone-ask-preview.webp)
 
-**Oct 30: tap to describe, hold to ask.** [Full video with sound](docs/media/phone-describe-ask.mp4)
-(2:41): 15 one-tap descriptions (median 1.4 s photo to voice), then 8 spoken questions ("Where's
-my bottle?", "What gloves color?"). Questions are re-voiced; the phone records no audio. A video
-model's review: [8/10](docs/media/phone-describe-ask.judge.json), timeliness 5/5. Confirmed misses:
-"citizenM" read as "Citizen", a radiator called a shelf, a cropped "fairlife" as "Airlife", an
-illegible laptop screen read anyway, and "What location?" not answered from a map. (Its call that
-"Well begun is half done" was invented is wrong: the cover says "WELL BEGUN".)
+**Oct 30: hold to ask.** [Full video with sound](docs/media/phone-ask.mp4) (1:06): 8 spoken
+questions ("What's the book?", "Where's my bottle?", "I can't find my gloves") answered from the
+photo taken at the press. The timer restarts with each photo; questions are re-voiced (the phone
+records no audio), answers play when the phone spoke them. A video model's review:
+[9/10](docs/media/phone-ask.judge.json), 7 of 8 correct; "What location?" got "a digital map"
+instead of the New York area. One-tap Describe (no question) runs at a median 1.4 s photo to voice.
 
 [Earlier: the first walk](docs/media/phone-walk.mp4) (40 s), live mode. Idle stretches longer than 6 s are cut to a short "skipped" card.
 Left, each photo as it was taken; right, what was being spoken and how long ago that photo

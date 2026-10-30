@@ -82,6 +82,9 @@ class MainActivity : Activity() {
     private var question: String? = null
     private var partial = ""
     private var heldByKey = false
+    private var pressAt = 0L                    // hold started (photo requested)
+    private var releaseAt = 0L                  // hold released (speech-to-text asked to finish)
+    private var sttAt = 0L                      // final transcript arrived
     private var holdStarted = false
     private val holdToAsk = Runnable { holdStarted = true; startAsk() }
 
@@ -248,6 +251,7 @@ class MainActivity : Activity() {
             return
         }
         looking = true
+        pressAt = System.currentTimeMillis(); releaseAt = 0L; sttAt = 0L
         tts.stop()
         synchronized(this) { pendingSpeech = null; speaking = false }
         askShot = null; askCameraFailed = false; question = null; partial = ""
@@ -268,6 +272,7 @@ class MainActivity : Activity() {
     private fun endAsk() {
         if (!listening) return
         listening = false
+        releaseAt = System.currentTimeMillis()
         tone.startTone(ToneGenerator.TONE_PROP_PROMPT, 80)
         ui.post { describeButton.text = "Thinking…" }
         recognizer?.stopListening()            // the final result arrives in onResults
@@ -282,6 +287,8 @@ class MainActivity : Activity() {
         override fun onResults(b: Bundle?) {
             val text = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
             question = text.ifBlank { partial }
+            sttAt = System.currentTimeMillis()
+            if (releaseAt == 0L) releaseAt = sttAt     // recognizer ended on its own before release
             listening = false
             tryAnswer()
         }
@@ -293,6 +300,8 @@ class MainActivity : Activity() {
         override fun onError(error: Int) {
             show("speech error $error")
             question = partial          // whatever was heard before the error, maybe nothing
+            sttAt = System.currentTimeMillis()
+            if (releaseAt == 0L) releaseAt = sttAt
             listening = false
             tryAnswer()
         }
@@ -326,7 +335,9 @@ class MainActivity : Activity() {
             heard = a.text
             buzz(20)
             tts.speak(heard, TextToSpeech.QUEUE_FLUSH, null, "${s.t0}|${s.photo}")
+            fun at(ms: Long): Any = if (ms > 0) iso.format(Date(ms)) else JSONObject.NULL
             logRow(JSONObject().put("photo", s.photo).put("mode", "ask").put("question", q)
+                .put("press_at", at(pressAt)).put("release_at", at(releaseAt)).put("stt_at", at(sttAt))
                 .put("size", sizeOf(onceSize)).put("captured_at", iso.format(Date(s.t0)))
                 .put("answered_at", iso.format(Date())).put("camera_s", s.camS).put("enhance", "auto")
                 .put("model_s", a.seconds).put("cost_usd", a.costUsd).put("status", "spoken")
