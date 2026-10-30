@@ -36,15 +36,28 @@ with measured cost and wait per model; light and dark themes.
 </p>
 
 **Data.** Samples of 7 public datasets (EgoBlind, VizWiz, GuideDog India, Indian currency, Indic
-signboards...), fetched file by file. Our own 232 "moments" (notes, signs, streets, items, our
-own rooms), each with the one line the device should say, 101 checked or rewritten by a person;
-Indian text kept in the original and in English.
+signboards...), fetched file by file. From them, our own "moments": a frame where the user asked
+nothing, and the one line the device should say, checked or rewritten by a person. Text in Indian
+languages keeps the original and an English line.
+
+| Category | Moments | Human-checked gold | From |
+|---|---|---|---|
+| Currency | 56 | 56 | Indian notes (Mendeley) |
+| Text | 66 | 24 | IndicSTR12 (6 languages), Tamil Nadu buses, VizWiz, EgoBlind |
+| Outdoor | 50 | 13 | GuideDog India (9 cities) |
+| Items | 32 | 8 | VizWiz, EgoBlind |
+| Home | 28 | drafts | our own sessions: people close, doors, head-height obstacles |
+| **Total** | **232** | **101** | split train / dev / test by source |
+
+<p align="center"><img src="docs/media/moments-samples.jpg" width="840" alt="Four moments with their gold lines: a 500 rupee note, a Hindi station sign translated, an Indian street, a supplement bottle"></p>
 
 **Hill-climbing.** One prompt, judged against the human gold by an LLM, train/dev/test held apart:
 6.2 to 7.8/10 on dev (`moment_v4`, shipped), with failures mined from our own sessions back into
-the set. Then 8 models × thinking on the same set: Gemini 3.5 Flash Lite scores best at the same
-1.3 s; Gemma 4 is fastest (0.6 s); Gemini 4 Argon is most accurate at ~8× the cost.
-[docs/evals.md](docs/evals.md)
+the set. Then 8 models with and without thinking on the dev moments; the app offers the ones on a
+frontier: Gemma 4 (fastest, 0.6 s), Gemini 3.1 and 3.5 Flash Lite, Qwen 3.8 Flash (cheapest), and
+Gemini 4 Argon (most accurate, ~8× the cost). [docs/evals.md](docs/evals.md)
+
+<p align="center"><img src="docs/media/model-pareto.png" width="840" alt="Score versus latency and score versus cost for 13 model configurations, with Pareto frontiers"></p>
 
 **Every session is recorded** and can be replayed with a new prompt or model, or turned into a
 video, without walking again. [Hold-to-ask video with sound](docs/media/phone-ask.mp4) (1:06, 8
@@ -54,11 +67,9 @@ questions); [the first walk](docs/media/phone-walk.mp4) (live mode).
 
 - [x] Board over USB and Wi-Fi; laptop loop; Android app with Describe, hold to ask, History, Settings.
 - [x] Evals: public samples, our moments set, prompt hill-climbing, model benchmark.
-- [ ] Collaborator in India: same kit, same steps ([GETTING_STARTED.md](GETTING_STARTED.md)).
-- [ ] Data cable for the phone (USB-C to micro-USB, or OTG), so photos skip Wi-Fi.
-- [ ] Review the 28 "home" gold drafts; v4.1 (shorter outdoor, fewer "too dark"); test the ask prompt offline.
-- [ ] Better pictures in dim rooms; keep running with the screen off; battery per session.
-- [ ] Test with blind users. Be My Eyes, Seeing AI and Envision set the bar.
+- [ ] Reproduce in India: same kit and steps with a collaborator ([GETTING_STARTED.md](GETTING_STARTED.md)).
+- [ ] HeyCyan glasses: the answer through open-ear speakers, no earphones.
+- [ ] Test with blind and low-vision interns.
 
 What we learned (prompts, hallucinations, speed, light, Wi-Fi): [docs/findings.md](docs/findings.md).
 Timings: [docs/benchmarks.md](docs/benchmarks.md).

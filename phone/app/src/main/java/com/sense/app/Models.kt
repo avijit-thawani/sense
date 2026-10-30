@@ -21,7 +21,7 @@ object Models {
         }
     }
 
-    // The shortlist from the Oct 30 2026 benchmark (docs/evals.md): the rest scored lower or took 2–8 s.
+    // The Oct 30 2026 benchmark's Pareto models (docs/evals.md): best score for their latency or cost.
     // Prices are $ per million tokens from openrouter.ai/api/v1/models, refreshed live when online.
     private val BUILT_IN = listOf(
         Model("google/gemini-3.1-flash-lite", "Gemini 3.1 Flash Lite", 0.25, 1.5, true,
@@ -30,6 +30,8 @@ object Models {
             mapOf("low" to (1.30 to 0.00061))),
         Model("google/gemma-4-31b-it", "Gemma 4 31B", 0.20, 0.40, true,
             mapOf("none" to (0.64 to 0.00042), "low" to (4.20 to 0.00110))),
+        Model("qwen/qwen3.8-flash", "Qwen 3.8 Flash", 0.15, 0.47, true,
+            mapOf("none" to (2.65 to 0.00013), "low" to (6.17 to 0.00037))),
         Model("google/gemini-4-argon", "Gemini 4 Argon", 2.0, 10.0, true,
             mapOf("low" to (4.57 to 0.00379))),
     )

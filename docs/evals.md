@@ -87,9 +87,13 @@ so differences under ~0.5 are noise). Latency is request to answer; cost is meas
 | GPT-5 nano, low | 4.57 | 5 | 7 | 8.00 | 12.69 | 0.25 |
 
 Gemini 3.5 Flash Lite, GPT-5 nano and Argon can't run with thinking "none" (OpenRouter returns 400);
-the app falls back to "low". The app's model list keeps four: 3.1 Flash Lite, 3.5 Flash Lite
-(best quality at the same speed), Gemma 4 (fastest), Argon (best, ~8x the cost and 3x slower).
-The prompt was tuned on Gemini, which favours it.
+the app falls back to "low". The app offers the Pareto models (best score for their latency or
+cost): Gemma 4 (fastest), 3.1 and 3.5 Flash Lite, Qwen 3.8 Flash (cheapest; slow 1 time in 10)
+and Argon (best, ~8x the cost and 3x slower). The prompt was tuned on Gemini, which favours it.
+
+![Score vs latency and cost](media/model-pareto.png)
+
+Redraw with `tools/plot_pareto.py` after new runs.
 
 ## Shipped on the phone (Oct 30)
 
