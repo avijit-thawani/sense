@@ -11,8 +11,15 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.hardware.usb.UsbManager
+import android.media.AudioFormat
 import android.media.AudioManager
+import android.media.AudioRecord
+import android.media.MediaRecorder
 import android.media.ToneGenerator
+import android.os.ParcelFileDescriptor
+import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -32,6 +39,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -59,7 +67,6 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var log: TextView
     private lateinit var photoView: ImageView
-    private lateinit var liveButton: Button
     private lateinit var describeButton: Button
     private lateinit var answerView: TextView
     private lateinit var tts: TextToSpeech
@@ -85,6 +92,77 @@ class MainActivity : Activity() {
     private var pressAt = 0L                    // hold started (photo requested)
     private var releaseAt = 0L                  // hold released (speech-to-text asked to finish)
     private var sttAt = 0L                      // final transcript arrived
+    // Debug: keep the user's own question audio (config "record_question_audio"). Android 13+:
+    // we record the mic and pipe the same PCM into the recognizer, so nothing waits on it.
+    private var recordQuestionAudio = false
+    @Volatile private var capturing = false
+    private var capture: Thread? = null
+    private var pcm = ByteArrayOutputStream()
+    private var captureStartAt = 0L
+    private val AUDIO_RATE = 16000
+
+    /** Starts recording and points the recognizer at our pipe. False = use the recognizer's own mic. */
+    private fun startCapture(intent: Intent): ParcelFileDescriptor? {
+        if (!recordQuestionAudio || Build.VERSION.SDK_INT < 33) return null
+        return try {
+            val min = AudioRecord.getMinBufferSize(AUDIO_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+            val rec = AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, AUDIO_RATE,
+                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(min, AUDIO_RATE))
+            if (rec.state != AudioRecord.STATE_INITIALIZED) { rec.release(); return null }
+            val (readEnd, writeEnd) = ParcelFileDescriptor.createPipe()
+            intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, readEnd)
+                .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
+                .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
+                .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, AUDIO_RATE)
+            pcm = ByteArrayOutputStream()
+            capturing = true
+            rec.startRecording()
+            captureStartAt = System.currentTimeMillis()
+            mark("audio_capture_start")
+            capture = Thread({
+                val buf = ByteArray(1600)               // 50 ms
+                val out = ParcelFileDescriptor.AutoCloseOutputStream(writeEnd)
+                while (capturing) {
+                    val n = rec.read(buf, 0, buf.size)
+                    if (n > 0) {
+                        synchronized(pcm) { pcm.write(buf, 0, n) }
+                        runCatching { out.write(buf, 0, n) }
+                    }
+                }
+                rec.stop(); rec.release()
+                runCatching { out.close() }               // end of stream: the recognizer finalizes
+            }, "question-audio").also { it.start() }
+            readEnd
+        } catch (e: Exception) {
+            show("audio capture off: ${e.message}")
+            capturing = false
+            null
+        }
+    }
+
+    private fun stopCapture() { capturing = false }
+
+    /** Writes the captured question as a 16 kHz mono WAV next to the photo. */
+    private fun saveQuestionAudio(photo: String): String? {
+        capture?.join(1000)
+        val data = synchronized(pcm) { pcm.toByteArray() }
+        if (data.isEmpty()) return null
+        val dir = sessionDir ?: return null
+        val name = photo.removeSuffix(".jpg") + ".wav"
+        val h = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
+        h.put("RIFF".toByteArray()).putInt(36 + data.size).put("WAVE".toByteArray())
+        h.put("fmt ".toByteArray()).putInt(16).putShort(1).putShort(1).putInt(AUDIO_RATE)
+            .putInt(AUDIO_RATE * 2).putShort(2).putShort(16)
+        h.put("data".toByteArray()).putInt(data.size)
+        File(dir, name).outputStream().use { it.write(h.array()); it.write(data) }
+        return name
+    }
+
+    // Finer marks from the recognizer, to see where the question-to-answer gap goes.
+    private val marks = HashMap<String, Long>()
+    private fun mark(name: String, overwrite: Boolean = true) {
+        synchronized(marks) { if (overwrite || name !in marks) marks[name] = System.currentTimeMillis() }
+    }
     private var holdStarted = false
     private val holdToAsk = Runnable { holdStarted = true; startAsk() }
 
@@ -101,6 +179,9 @@ class MainActivity : Activity() {
     private var sessionDir: File? = null
     private var key = ""
     private var model = "google/gemini-3.1-flash-lite"
+    private var reasoning = "none"
+    /** The thinking level actually used for a model (some can't think "none"). */
+    private fun effort(id: String = model) = Models.effort(this, id, reasoning)
     private var budgetUsd = 1.0
     private var size = 'v'
 
@@ -112,6 +193,7 @@ class MainActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         buildUi()
         loadConfig()
+        Brain.onThinkingRequired = { Models.rememberThinkingRequired(this, it) }
         tts = TextToSpeech(this) { ok ->
             if (ok == TextToSpeech.SUCCESS) {
                 tts.setSpeechRate(1.5f)
@@ -139,30 +221,52 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
-    private fun rounded(color: Int, radius: Float) = GradientDrawable().apply { setColor(color); cornerRadius = radius }
+    private lateinit var home: View
+    private lateinit var history: HistoryPage
+    private lateinit var content: FrameLayout
+    private var tab = "home"
+    private var statusText = "Starting…"
+    private var logText = ""
+    private var answerText: CharSequence = "Tap to describe. Hold to ask a question. Volume down works too."
+    private var lastPhoto: android.graphics.Bitmap? = null
+    private val prefs by lazy { getSharedPreferences("sense", MODE_PRIVATE) }
+    private fun devDetails() = prefs.getBoolean("dev_details", false)
 
-    /** One big Describe button (also the volume-down key), the last answer in large type, and small
-     *  Live / Reconnect controls. High contrast and TalkBack labels, for low-vision and blind use. */
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (Ui.mode(this) == "system") buildUi()          // follow the phone's dark mode without a restart
+    }
+
+    /** Three frozen tabs (Home, History, Settings), themed light or dark (Settings > Appearance).
+     *  Home is one big Describe button (also the volume-down key) and the last answer in large type. */
     private fun buildUi() {
-        val dp = resources.displayMetrics.density
-        val bg = Color.rgb(12, 12, 14)
-        val accent = Color.rgb(255, 204, 0)
-        window.statusBarColor = bg
+        Ui.apply(this)
+        Currency.load(this)
+        val p = Ui.p
+        fun px(v: Int) = Ui.dp(this, v)
+        window.statusBarColor = p.bg
+        window.navigationBarColor = p.card
+        if (Build.VERSION.SDK_INT >= 30) {
+            val light = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+            window.insetsController?.setSystemBarsAppearance(if (p.dark) 0 else light, light)
+        }
+
+        // Home
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(bg)
-            setPadding((18 * dp).toInt(), (44 * dp).toInt(), (18 * dp).toInt(), (18 * dp).toInt())
+            setBackgroundColor(p.bg)
+            setPadding(px(18), px(44), px(18), px(14))
         }
-        status = TextView(this).apply {
-            textSize = 14f; setTextColor(Color.rgb(160, 160, 168)); text = "Starting…"
-        }
+        status = Ui.text(this, homeStatus(), 13f, p.muted).apply { maxLines = 3 }
         describeButton = Button(this).apply {
             text = "Describe"
             textSize = 40f
             isAllCaps = false
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.BLACK)
-            background = rounded(accent, 36 * dp)
+            setTextColor(p.onPrimary)
+            background = Ui.rounded(p.primary, 36f * resources.displayMetrics.density)
+            stateListAnimator = null
             contentDescription = "Describe what is in front of me. Hold to ask a question. Volume down works the same way."
             // Tap = describe. Hold (over 0.4 s) = ask: speak while holding, release to send.
             setOnTouchListener { v, e ->
@@ -178,45 +282,221 @@ class MainActivity : Activity() {
             }
             setOnClickListener { requestDescribe() }
         }
-        answerView = TextView(this).apply {
-            textSize = 24f
-            setTextColor(Color.WHITE)
-            setPadding(0, (16 * dp).toInt(), 0, (8 * dp).toInt())
-            text = "Tap to describe. Hold to ask a question. Volume down works too."
-        }
+        answerView = Ui.text(this, answerText, 24f).apply { setPadding(0, px(16), 0, px(8)) }
         photoView = ImageView(this).apply {
             adjustViewBounds = true
-            maxHeight = (150 * dp).toInt()
+            maxHeight = px(140)
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            lastPhoto?.let { setImageBitmap(it) }
         }
-        fun small(label: String, onClick: () -> Unit) = Button(this).apply {
-            text = label; textSize = 16f; isAllCaps = false
-            setTextColor(Color.WHITE)
-            background = rounded(Color.rgb(44, 44, 50), 18 * dp)
-            setOnClickListener { onClick() }
-        }
-        liveButton = small("Live: off") { toggleLive() }
-        val reconnect = small("Reconnect") { board = null; connect() }
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, (12 * dp).toInt(), 0, 0)
-            addView(liveButton, LinearLayout.LayoutParams(0, (52 * dp).toInt(), 1f).apply { marginEnd = (10 * dp).toInt() })
-            addView(reconnect, LinearLayout.LayoutParams(0, (52 * dp).toInt(), 1f))
-        }
-        log = TextView(this).apply { textSize = 11f; setTextColor(Color.rgb(110, 110, 118)) }
+        log = Ui.text(this, logText, 11f, p.muted)
         root.addView(status)
-        root.addView(describeButton, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.6f)
-            .apply { topMargin = (14 * dp).toInt() })
+        root.addView(describeButton, LinearLayout.LayoutParams(-1, 0, 1.6f).apply { topMargin = px(12) })
         root.addView(answerView)
         root.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.TOP
-            addView(photoView, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            addView(ScrollView(this@MainActivity).apply { addView(log) },
-                LinearLayout.LayoutParams(0, (150 * dp).toInt(), 1f).apply { marginStart = (10 * dp).toInt() })
+            addView(photoView, LinearLayout.LayoutParams(0, -2, 1f))
+            if (devDetails()) addView(ScrollView(this@MainActivity).apply { addView(log) },
+                LinearLayout.LayoutParams(0, px(140), 1f).apply { marginStart = px(10) })
         })
-        root.addView(row)
-        setContentView(root)
+        home = root
+        history = HistoryPage(this, { tts.speak(it, TextToSpeech.QUEUE_FLUSH, null, "replay") },
+            { if (::tts.isInitialized) tts.stop() }, ::devDetails)
+
+        // Tabs: icon above label; the active one in the accent colour, bold, on a tinted pill.
+        content = FrameLayout(this)
+        val tabs = listOf(Triple("home", "Home", R.drawable.ic_home),
+            Triple("history", "History", R.drawable.ic_history), Triple("settings", "Settings", R.drawable.ic_settings))
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundColor(p.card)
+            setPadding(px(8), px(6), px(8), px(6))
+        }
+        for ((id, label, icon) in tabs) {
+            val on = id == tab
+            val color = if (on) p.primaryText else p.muted
+            bar.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setPadding(0, px(6), 0, px(6))
+                if (on) background = Ui.rounded(if (p.dark) Color.rgb(44, 44, 50) else Color.rgb(255, 244, 204), px(14).toFloat())
+                addView(Ui.icon(this@MainActivity, icon, color), LinearLayout.LayoutParams(px(24), px(24)))
+                addView(Ui.text(this@MainActivity, label, 12f, color, on).apply { setPadding(0, px(2), 0, 0) },
+                    LinearLayout.LayoutParams(-2, -2))
+                contentDescription = "$label tab" + if (on) ", selected" else ""
+                setOnClickListener { if (id != tab) { tab = id; buildUi() } }
+            }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = px(4); marginEnd = px(4) })
+        }
+        history.stop()
+        when (tab) {
+            "home" -> content.addView(home)
+            "history" -> { history.show(); content.addView(history.view) }
+            else -> content.addView(buildSettings())
+        }
+        val outer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(p.bg)
+            addView(content, LinearLayout.LayoutParams(-1, 0, 1f))
+            addView(Ui.divider(this@MainActivity), LinearLayout.LayoutParams(-1, 1))
+            addView(bar)
+            setOnApplyWindowInsetsListener { _, insets ->      // keep the tabs above the gesture bar
+                @Suppress("DEPRECATION") bar.setPadding(px(8), px(6), px(8), px(6) + insets.systemWindowInsetBottom)
+                insets
+            }
+        }
+        setContentView(outer)
+    }
+
+    /** Settings: appearance, camera, spending and debugging; cards of title, one-line detail, control. */
+    private fun buildSettings(): View {
+        val p = Ui.p
+        fun px(v: Int) = Ui.dp(this, v)
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(px(16), 0, px(16), px(24)) }
+        fun group(title: String, vararg rows: View) {
+            col.addView(Ui.section(this, title))
+            col.addView(Ui.card(this).apply {
+                rows.forEachIndexed { i, r ->
+                    if (i > 0) addView(Ui.divider(this@MainActivity), LinearLayout.LayoutParams(-1, 1))
+                    addView(r)
+                }
+            })
+        }
+        group("Appearance", LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, px(12), 0, px(14))
+            addView(Ui.text(this@MainActivity, "Theme", 16f, bold = true))
+            addView(Ui.text(this@MainActivity, "Light, dark, or follow the phone", 13f, p.muted).apply { setPadding(0, 0, 0, px(10)) })
+            addView(Ui.segmented(this@MainActivity, listOf("system" to "System", "light" to "Light", "dark" to "Dark"), Ui.mode(this@MainActivity)) {
+                prefs.edit().putString("theme", it).apply(); buildUi()
+            })
+        })
+        group("Camera",
+            Ui.row(this, if (board != null) "Connected" else "Not connected", cameraLine() +
+                    (if (board == null) "\n$statusText" else ""),
+                Ui.quietButton(this, "Reconnect") { board = null; connect(); say("Reconnecting", "status") }),
+            Ui.row(this, "Live mode", "Keep describing every few seconds, the older mode",
+                Ui.toggle(this, live) { if (it != live) toggleLive() }))
+        val m = Models.find(this, model)
+        val est = Models.estimateUsd(m, effort())
+        val measured = measuredCost(model, effort())
+        val thinking: View = if (Models.thinkingRequired(this, model)) Ui.row(this, "Thinking", "Always a little for this model; it can't be turned off", null)
+        else if (m.reasons) LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, px(12), 0, px(14))
+            addView(Ui.text(this@MainActivity, "Thinking", 16f, bold = true))
+            addView(Ui.text(this@MainActivity, "Thinking a little first: sometimes better, usually slower", 13f, p.muted)
+                .apply { setPadding(0, 0, 0, px(10)) })
+            addView(Ui.segmented(this@MainActivity, listOf("none" to "None", "low" to "Low"), effort()) {
+                reasoning = it; prefs.edit().putString("reasoning", it).apply(); buildUi()
+            })
+        } else Ui.row(this, "Thinking", "This model answers without thinking first", null)
+        group("Model",
+            Ui.row(this, m.name, null, Ui.quietButton(this, "Change") { pickModel() }).apply {
+                addView(Ui.icon(this@MainActivity, m.logo, logoTint(m)),
+                    0, LinearLayout.LayoutParams(px(24), px(24)).apply { marginEnd = px(12) })
+            },
+            thinking,
+            Ui.row(this, "Cost per 1000 moments", measured?.let { (_, n) -> "Measured over your last $n" } ?: "Estimated",
+                Ui.text(this, (if (measured == null) "≈ " else "") + moneyColumn((measured?.first ?: est) * 1000), 17f, bold = true)))
+        group("Spending",
+            Ui.row(this, "Spent so far", "${money(spent())} of ${money(budgetUsd)}", null),
+            Ui.row(this, "Currency", null, Ui.segmented(this, listOf("inr" to "₹", "usd" to "$"),
+                if (Currency.rupees) "inr" else "usd") {
+                prefs.edit().putString("currency", it).apply(); Currency.load(this); buildUi()
+            }.apply { layoutParams = LinearLayout.LayoutParams(px(130), -2) }))
+        maybeRefreshPrices()
+        group("Debugging",
+            Ui.row(this, "Record my questions", "Keep your voice with each question so History can replay it",
+                Ui.toggle(this, recordQuestionAudio) { recordQuestionAudio = it; prefs.edit().putBoolean("record_question_audio", it).apply() }),
+            Ui.row(this, "Developer details", "Activity log on Home; prompt, file and model details in History",
+                Ui.toggle(this, devDetails()) { prefs.edit().putBoolean("dev_details", it).apply() }))
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(p.bg)
+            addView(Ui.header(this@MainActivity, "Settings", "Camera, voice and look"))
+            addView(ScrollView(this@MainActivity).apply { addView(col) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        }
+    }
+
+    private fun logoTint(m: Models.Model) = if (m.logo == R.drawable.logo_openai) Ui.p.text else null
+
+    /** One line per model: logo, name, estimated cost per moment at the current thinking level. */
+    private fun pickModel() {
+        val p = Ui.p
+        fun px(v: Int) = Ui.dp(this, v)
+        val theme = if (p.dark) android.R.style.Theme_DeviceDefault_Dialog_Alert
+            else android.R.style.Theme_DeviceDefault_Light_Dialog_Alert
+        val dialog = android.app.AlertDialog.Builder(this, theme).create()
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(px(12), px(8), px(12), px(8)) }
+        col.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.BOTTOM
+            setPadding(px(12), px(12), px(12), px(10))
+            addView(Ui.text(this@MainActivity, "Model", 20f, bold = true), LinearLayout.LayoutParams(0, -2, 1f))
+            addView(Ui.text(this@MainActivity, "wait", 13f, p.muted).apply { gravity = Gravity.END }, LinearLayout.LayoutParams(px(56), -2))
+            addView(Ui.text(this@MainActivity, "per 1000", 13f, p.muted).apply { gravity = Gravity.END }, LinearLayout.LayoutParams(px(76), -2))
+        })
+        for (m in Models.all(this)) {
+            val on = m.id == model
+            col.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(px(12), px(14), px(12), px(14))
+                if (on) background = Ui.rounded(if (p.dark) Color.rgb(44, 44, 50) else Color.rgb(255, 244, 204), px(12).toFloat())
+                addView(Ui.icon(this@MainActivity, m.logo, logoTint(m)), LinearLayout.LayoutParams(px(22), px(22)).apply { marginEnd = px(14) })
+                addView(Ui.text(this@MainActivity, m.name, 16f, p.text, on), LinearLayout.LayoutParams(0, -2, 1f))
+                addView(Ui.text(this@MainActivity, Models.latency(m, effort(m.id))?.let { "%.1f s".format(it) } ?: "", 15f, p.muted).apply {
+                    fontFeatureSettings = "tnum"; gravity = Gravity.END
+                }, LinearLayout.LayoutParams(px(56), -2))
+                addView(Ui.text(this@MainActivity, moneyColumn(Models.estimateUsd(m, effort(m.id)) * 1000), 15f, p.muted).apply {
+                    fontFeatureSettings = "tnum"; gravity = Gravity.END
+                }, LinearLayout.LayoutParams(px(76), -2))
+                contentDescription = "${m.name}, about ${moneyColumn(Models.estimateUsd(m, effort(m.id)) * 1000)} per 1000 moments" + if (on) ", selected" else ""
+                setOnClickListener {
+                    model = m.id
+                    prefs.edit().putString("model", model).apply()
+                    dialog.dismiss(); buildUi()
+                }
+            })
+        }
+        dialog.setView(ScrollView(this).apply { addView(col) })
+        dialog.window?.setBackgroundDrawable(Ui.rounded(p.card, px(20).toFloat()))
+        dialog.show()
+    }
+
+    /** Median real cost per moment for this model and thinking level, from the session logs.
+     *  Rows from before model logging were all Gemini 3.1 Flash Lite without thinking. */
+    private fun measuredCost(id: String, effort: String): Pair<Double, Int>? {
+        val costs = ArrayList<Double>()
+        getExternalFilesDir("sessions")?.listFiles()?.forEach { dir ->
+            File(dir, "session.jsonl").takeIf { it.exists() }?.forEachLine { line ->
+                val r = runCatching { JSONObject(line) }.getOrNull() ?: return@forEachLine
+                if (r.optString("mode") !in setOf("ask", "moment")) return@forEachLine
+                if (r.optString("model", "google/gemini-3.1-flash-lite") != id) return@forEachLine
+                if (r.optString("reasoning", "none") != effort) return@forEachLine
+                r.optDouble("cost_usd").takeIf { !it.isNaN() && it > 0 }?.let { costs += it }
+            }
+        }
+        if (costs.isEmpty()) return null
+        costs.sort()
+        return costs[costs.size / 2] to costs.size
+    }
+
+    /** Live OpenRouter prices, at most once a day; redraws Settings when they arrive. */
+    private fun maybeRefreshPrices() {
+        if (System.currentTimeMillis() - prefs.getLong("prices_at", 0) < 24 * 3600_000L) return
+        prefs.edit().putLong("prices_at", System.currentTimeMillis()).apply()
+        Thread { if (Models.refresh(this)) ui.post { if (tab == "settings") buildUi() } }.start()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        when {
+            tab == "history" && history.back() -> {}
+            tab != "home" -> { tab = "home"; buildUi() }
+            else -> @Suppress("DEPRECATION") super.onBackPressed()
+        }
     }
 
     // Volume-down: press = describe, hold = ask (same as the big button).
@@ -252,27 +532,35 @@ class MainActivity : Activity() {
         }
         looking = true
         pressAt = System.currentTimeMillis(); releaseAt = 0L; sttAt = 0L
+        synchronized(marks) { marks.clear() }
         tts.stop()
         synchronized(this) { pendingSpeech = null; speaking = false }
         askShot = null; askCameraFailed = false; question = null; partial = ""
         askCapture = true                       // the camera loop takes the photo right away
         buzz(60); tone.startTone(ToneGenerator.TONE_PROP_BEEP2, 120)
-        ui.post { describeButton.text = "Listening…"; describeButton.alpha = 0.6f; answerView.text = "…" }
+        ui.post { describeButton.text = "Listening…"; describeButton.alpha = 0.6f; setAnswer("…") }
         listening = true
         val r = recognizer ?: newRecognizer().also { recognizer = it }
         r.setRecognitionListener(listener)
-        r.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
             .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 4000L)
-            .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 4000L))
+            .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 4000L)
+        captureReadEnd = startCapture(intent)
+        r.startListening(intent)
     }
+
+    // startListening() parcels the intent later on another thread: keep our read end open until the ask ends.
+    private var captureReadEnd: ParcelFileDescriptor? = null
+    private fun closeReadEnd() { runCatching { captureReadEnd?.close() }; captureReadEnd = null }
 
     private fun endAsk() {
         if (!listening) return
         listening = false
         releaseAt = System.currentTimeMillis()
+        stopCapture()                          // closes our pipe: end of audio for the recognizer
         tone.startTone(ToneGenerator.TONE_PROP_PROMPT, 80)
         ui.post { describeButton.text = "Thinking…" }
         recognizer?.stopListening()            // the final result arrives in onResults
@@ -288,28 +576,33 @@ class MainActivity : Activity() {
             val text = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
             question = text.ifBlank { partial }
             sttAt = System.currentTimeMillis()
+            closeReadEnd()
             if (releaseAt == 0L) releaseAt = sttAt     // recognizer ended on its own before release
             listening = false
             tryAnswer()
         }
         override fun onPartialResults(b: Bundle?) {
             b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let {
-                if (it.isNotBlank()) { partial = it; ui.post { answerView.text = "“$it”" } }
+                if (it.isNotBlank()) {
+                    if (it != partial) { mark("first_partial", overwrite = false); mark("last_partial") }
+                    partial = it; ui.post { setAnswer("“$it”") }
+                }
             }
         }
         override fun onError(error: Int) {
             show("speech error $error")
+            stopCapture(); closeReadEnd()
             question = partial          // whatever was heard before the error, maybe nothing
             sttAt = System.currentTimeMillis()
             if (releaseAt == 0L) releaseAt = sttAt
             listening = false
             tryAnswer()
         }
-        override fun onReadyForSpeech(p: Bundle?) {}
-        override fun onBeginningOfSpeech() {}
+        override fun onReadyForSpeech(p: Bundle?) { mark("mic_ready") }
+        override fun onBeginningOfSpeech() { mark("speech_begin", overwrite = false) }
         override fun onRmsChanged(v: Float) {}
         override fun onBufferReceived(b: ByteArray?) {}
-        override fun onEndOfSpeech() {}
+        override fun onEndOfSpeech() { mark("speech_end") }
         override fun onEvent(t: Int, p: Bundle?) {}
     }
 
@@ -321,7 +614,7 @@ class MainActivity : Activity() {
         val shot = askShot ?: return@post
         question = null
         if (q.isBlank()) { say("Didn't catch the question.", "status"); doneLooking("Didn't catch the question."); return@post }
-        answerView.text = "“$q”"
+        setAnswer("“$q”")
         net.execute { answer(q, shot) }
     }
 
@@ -329,18 +622,30 @@ class MainActivity : Activity() {
         var heard = ""
         try {
             val jpeg = Brain.brighten(s.jpeg)
-            ui.post { photoView.setImageBitmap(BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)) }
-            val a = Brain.describe(jpeg, key, model, askPrompt.replace("{q}", q.replace("\"", "'")), maxTokens = 200)
+            ui.post { BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size).let { lastPhoto = it; photoView.setImageBitmap(it) } }
+            mark("request_sent")
+            val a = Brain.describe(jpeg, key, model, askPrompt.replace("{q}", q.replace("\"", "'")),
+                maxTokens = Models.maxTokens(200, effort()), reasoning = effort())
+            mark("answer_received")
             addSpent(a.costUsd)
             heard = a.text
             buzz(20)
+            mark("voice_requested")
             tts.speak(heard, TextToSpeech.QUEUE_FLUSH, null, "${s.t0}|${s.photo}")
             fun at(ms: Long): Any = if (ms > 0) iso.format(Date(ms)) else JSONObject.NULL
+            val m = JSONObject()
+            synchronized(marks) { marks.forEach { (k, v) -> m.put(k, iso.format(Date(v))) } }
+            val wav = if (recordQuestionAudio) saveQuestionAudio(s.photo) else null
             logRow(JSONObject().put("photo", s.photo).put("mode", "ask").put("question", q)
+                .put("marks", m)
+                .put("question_audio", wav ?: JSONObject.NULL)
+                .put("question_audio_start_at", if (wav != null) iso.format(Date(captureStartAt)) else JSONObject.NULL)
                 .put("press_at", at(pressAt)).put("release_at", at(releaseAt)).put("stt_at", at(sttAt))
                 .put("size", sizeOf(onceSize)).put("captured_at", iso.format(Date(s.t0)))
                 .put("answered_at", iso.format(Date())).put("camera_s", s.camS).put("enhance", "auto")
                 .put("model_s", a.seconds).put("cost_usd", a.costUsd).put("status", "spoken")
+                .put("model", model).put("reasoning", effort()).put("tokens_in", a.tokensIn)
+                .put("tokens_out", a.tokensOut).put("reasoning_tokens", a.reasoningTokens)
                 .put("text", a.text).put("spoken_text", heard).put("prompt_file", askPromptFile)
                 .put("device", "android").put("link", s.link))
             show("[ask: cam ${"%.2f".format(s.camS)}s + model ${"%.2f".format(a.seconds)}s] Q: $q → $heard")
@@ -370,14 +675,27 @@ class MainActivity : Activity() {
     private fun doneLooking(answer: String) = ui.post {
         looking = false
         describeButton.text = "Describe"; describeButton.alpha = 1f
-        answerView.text = answer
+        setAnswer(answer)
     }
 
     private fun show(msg: String) = ui.post {
-        log.text = (msg + "\n" + log.text).take(4000)
+        logText = (msg + "\n" + logText).take(4000)
+        log.text = logText
     }
 
-    private fun setStatus(msg: String) = ui.post { status.text = msg }
+    private fun setAnswer(t: CharSequence) { answerText = t; answerView.text = t }
+
+    private fun setStatus(msg: String) = ui.post { statusText = msg; status.text = homeStatus() }
+
+    private fun cameraLine() = when (val b = board) {
+        is WifiBoard -> "Camera on Wi-Fi"
+        null -> "Camera not connected"
+        else -> "Camera on USB"
+    }
+
+    /** Short by default; the full last status message with developer details on. */
+    private fun homeStatus() = (if (board != null) "●  " else "○  ") + cameraLine() +
+        (if (devDetails() || board == null) "\n$statusText" else "")
 
     private fun loadConfig() {
         key = File(filesDir, "openrouter_key.txt").takeIf { it.exists() }?.readText()?.trim().orEmpty()
@@ -390,13 +708,18 @@ class MainActivity : Activity() {
             momentPromptFile = c.optString("moment_prompt", momentPromptFile)
             onceSize = c.optString("once_size", "g").firstOrNull() ?: 'g'
             askPromptFile = c.optString("ask_prompt", askPromptFile)
+            recordQuestionAudio = c.optBoolean("record_question_audio", false)
         }
+        prefs.getString("model", null)?.let { model = it }
+        reasoning = prefs.getString("reasoning", "none")!!.takeIf { it == "none" || it == "low" } ?: "low"
+        if (prefs.contains("record_question_audio")) recordQuestionAudio = prefs.getBoolean("record_question_audio", false)
         momentPrompt = assets.open(momentPromptFile).bufferedReader().readText().trim()
         askPrompt = assets.open(askPromptFile).bufferedReader().readText().trim()
         if (key.isEmpty()) setStatus("No API key: push openrouter_key.txt over adb (phone/README.md)")
     }
 
     private fun spent(): Double = getSharedPreferences("sense", MODE_PRIVATE).getFloat("spent", 0f).toDouble()
+    private fun spentText() = "Spent ${money(spent())} of ${money(budgetUsd)}"
     private fun addSpent(usd: Double) {
         val p = getSharedPreferences("sense", MODE_PRIVATE)
         p.edit().putFloat("spent", (spent() + usd).toFloat()).apply()
@@ -441,7 +764,7 @@ class MainActivity : Activity() {
                 runCatching { b.grab() }
                 boardSize = size
                 port = p; board = b
-                setStatus("Board connected. ${"%.3f".format(spent())} of $$budgetUsd spent. Model: $model")
+                setStatus("Board connected. ${spentText()}. Model: $model")
             } catch (e: Exception) {
                 setStatus("USB error: ${e.message}")
             } finally {
@@ -461,7 +784,7 @@ class MainActivity : Activity() {
                 boardSize = size
                 board = w
                 setStatus("Board on Wi-Fi ($boardIp); USB is power only. " +
-                    "${"%.3f".format(spent())} of $$budgetUsd spent. Model: $model")
+                    "${spentText()}. Model: $model")
             } catch (e: Exception) {
                 setStatus("No USB data and board not reachable at $boardIp (${e.message}). Retrying…")
             } finally {
@@ -474,7 +797,6 @@ class MainActivity : Activity() {
 
     private fun toggleLive() {
         live = !live
-        liveButton.text = if (live) "Live: on" else "Live: off"
         say(if (live) "Live on" else "Live off", "status")
         if (live && sessionDir == null) newSession()
     }
@@ -515,7 +837,9 @@ class MainActivity : Activity() {
                 try {
                     ensureSize(b, onceSize)
                     val t0 = System.currentTimeMillis()
+                    mark("photo_requested")
                     val jpeg = b.grab()
+                    mark("photo_in_hand")
                     val camS = (System.currentTimeMillis() - t0) / 1000.0
                     if (sessionDir == null) newSession()
                     val photo = stamp.format(Date(t0)) + "-${(t0 / 100) % 10}.jpg"
@@ -567,8 +891,8 @@ class MainActivity : Activity() {
         var heard = ""
         try {
             val jpeg = Brain.brighten(raw)
-            ui.post { photoView.setImageBitmap(BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)) }
-            val a = Brain.describe(jpeg, key, model, momentPrompt, maxTokens = 150)
+            ui.post { BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size).let { lastPhoto = it; photoView.setImageBitmap(it) } }
+            val a = Brain.describe(jpeg, key, model, momentPrompt, maxTokens = Models.maxTokens(150, effort()), reasoning = effort())
             addSpent(a.costUsd)
             val now = System.currentTimeMillis()
             heard = if (a.text.trim(' ', '.', '"', '\'').uppercase() == "SILENT") "Nothing notable." else a.text
@@ -578,11 +902,13 @@ class MainActivity : Activity() {
             logRow(JSONObject().put("photo", photo).put("mode", "moment").put("size", sizeOf(onceSize))
                 .put("captured_at", iso.format(Date(capturedAt))).put("answered_at", iso.format(Date(now)))
                 .put("camera_s", camS).put("enhance", "auto").put("model_s", a.seconds)
+                .put("model", model).put("reasoning", effort()).put("tokens_in", a.tokensIn)
+                .put("tokens_out", a.tokensOut).put("reasoning_tokens", a.reasoningTokens)
                 .put("cost_usd", a.costUsd).put("status", "spoken").put("text", a.text)
                 .put("spoken_text", heard).put("prompt_file", momentPromptFile)
                 .put("device", "android").put("link", link))
             show("[once: cam ${"%.2f".format(camS)}s + model ${"%.2f".format(a.seconds)}s] $heard")
-            setStatus("${if (link == "wifi") "Camera on Wi-Fi" else "Camera on USB"} · ${"%.3f".format(spent())} of $$budgetUsd spent")
+            setStatus("${if (link == "wifi") "Camera on Wi-Fi" else "Camera on USB"} · ${spentText()}")
         } catch (e: Exception) {
             heard = "Couldn't describe: ${e.message?.take(60)}"
             say("Couldn't reach the describer. Try again.", "status")
@@ -600,7 +926,7 @@ class MainActivity : Activity() {
             val e0 = System.nanoTime()
             val jpeg = Brain.brighten(raw)
             val enhS = (System.nanoTime() - e0) / 1e9
-            ui.post { photoView.setImageBitmap(BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)) }
+            ui.post { BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size).let { lastPhoto = it; photoView.setImageBitmap(it) } }
             val a = Brain.describe(jpeg, key, model)
             addSpent(a.costUsd)
             val now = System.currentTimeMillis()
@@ -636,7 +962,12 @@ class MainActivity : Activity() {
                 .put("spoken_at", iso.format(Date(launched.remove(id) ?: System.currentTimeMillis())))
                 .put("audio_at", iso.format(Date())).put("voice", "android-tts"))
         }
-        override fun onDone(id: String) = next()
+        override fun onDone(id: String) {
+            val photo = id.substringAfter("|", "")
+            if (photo.isNotEmpty())
+                logRow(JSONObject().put("photo", photo).put("event", "spoke_done").put("done_at", iso.format(Date())))
+            next()
+        }
         @Deprecated("Deprecated in Java")
         override fun onError(id: String) = next()
         private fun next() {

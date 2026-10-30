@@ -1,6 +1,6 @@
 """Hill-climb the device's no-question prompt against human-checked moment gold.
 
-  run NAME PROMPT_FILE SPLIT [--hist=0] [--px=640] [--model=M] [--judge=J] [--final]
+  run NAME PROMPT_FILE SPLIT [--hist=0] [--px=640] [--model=M] [--reasoning=none|low] [--judge=J] [--final]
   report [SPLIT]                 one line per run: score, coverage, critical errors, words, by category
   sheet NAME[,NAME...] SPLIT     side-by-side image / gold / replies / judge, worst first
 
@@ -70,7 +70,7 @@ def judge(m, pred, model):
         return {"error": text[:200], "judge_cost": cost}
 
 
-def run(name, prompt_file, split, hist=0, px=640, model=MODEL, judge_model=JUDGE, final=False):
+def run(name, prompt_file, split, hist=0, px=640, model=MODEL, judge_model=JUDGE, final=False, reasoning="none"):
     if split == "test" and not final:
         sys.exit("test is held out: pass --final for the one last check")
     prompt = open(os.path.join(HERE, prompt_file) if not os.path.isabs(prompt_file) else prompt_file).read().strip()
@@ -87,13 +87,15 @@ def run(name, prompt_file, split, hist=0, px=640, model=MODEL, judge_model=JUDGE
                 p = prompt + (f"\nThe first {len(jpegs) - 1} images are the previous seconds, oldest first; "
                               "the last image is now." if len(jpegs) > 1 else "")
                 text, secs, cost = describe(jpegs, p, model=model,
-                                            extra={"max_tokens": 120},
+                                            # thinking models return nothing if thinking fills max_tokens
+                                            extra={"max_tokens": 120 if reasoning == "none" else 2500,
+                                                   "reasoning": {"effort": reasoning}},
                                             log={"climb": name, "id": m["id"], "n_images": len(jpegs)})
                 spoken = "" if text.strip(" .\"'").upper() == "SILENT" else text
                 v = judge(m, spoken or "(silent)", judge_model)
                 return {"id": m["id"], "category": m["category"], "gold": m["gold"], "said": spoken,
                         "words": len(spoken.split()), "model_s": round(secs, 2), "cost_usd": cost,
-                        "prompt_file": prompt_file, "hist": hist, "px": px, "model": model, **v}
+                        "prompt_file": prompt_file, "hist": hist, "px": px, "model": model, "reasoning": reasoning, **v}
             except Exception as e:
                 if "spend cap" in str(e):
                     raise
@@ -205,7 +207,7 @@ if __name__ == "__main__":
     opts = dict((a[2:].split("=", 1) + [True])[:2] for a in sys.argv[1:] if a.startswith("--"))
     if args[0] == "run":
         run(args[1], args[2], args[3], int(opts.get("hist", 0)), int(opts.get("px", 640)),
-            opts.get("model", MODEL), opts.get("judge", JUDGE), "final" in opts)
+            opts.get("model", MODEL), opts.get("judge", JUDGE), "final" in opts, opts.get("reasoning", "none"))
     elif args[0] == "report":
         report(args[1] if len(args) > 1 else None)
     elif args[0] == "rejudge":

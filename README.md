@@ -4,118 +4,77 @@
      drop what is no longer surprising, or move reference material to docs/. -->
 
 A small camera that describes the world to a blind person through earphones. A thumb-sized
-board with a camera takes a photo every second or two; a phone (or laptop) sends it to a fast
-vision model and speaks a few words: "Person ahead, close. Chair left."
+board with a camera sends photos to a phone; the phone asks a fast vision model and speaks a few
+words. Tap for "what's in front of me", or hold and ask a question.
 
-**New here? Start with [GETTING_STARTED.md](GETTING_STARTED.md).** You'll need the camera kit,
-a micro-USB data cable, a laptop, and an [OpenRouter](https://openrouter.ai) key (the AI that
-describes the photos; about ₹1 per minute).
+<p align="center">
+  <img src="docs/media/app-replay.webp" width="420" alt="A hold-to-ask moment replayed in the app: lap timer, milestones, latency badge and timelines">
+</p>
 
-![hold to ask on the phone](docs/media/phone-ask-preview.webp)
+*"Can you find my gloves?" replayed in the app's History: the photo at the press, your hold,
+speech-to-text, the model, and the answer, 1.51 s from letting go to the first word.*
 
-**Oct 30: hold to ask.** [Full video with sound](docs/media/phone-ask.mp4) (1:06): 8 spoken
-questions ("What's the book?", "Where's my bottle?", "I can't find my gloves") answered from the
-photo taken at the press. The timer restarts with each photo; questions are re-voiced (the phone
-records no audio), answers play when the phone spoke them. A video model's review:
-[9/10](docs/media/phone-ask.judge.json), 7 of 8 correct; "What location?" got "a digital map"
-instead of the New York area. One-tap Describe (no question) runs at a median 1.4 s photo to voice.
+**Setting it up?** [GETTING_STARTED.md](GETTING_STARTED.md) (from unboxing, no experience needed),
+then [docs/workflow.md](docs/workflow.md) (live, replay, videos) and [phone/README.md](phone/README.md).
 
-[Earlier: the first walk](docs/media/phone-walk.mp4) (40 s), live mode. Idle stretches longer than 6 s are cut to a short "skipped" card.
-Left, each photo as it was taken; right, what was being spoken and how long ago that photo
-was taken (about 1.9 s); bottom, the words heard. A video model's review of it is in
-[phone-walk.judge.json](docs/media/phone-walk.judge.json) (8/10).
+## Highlights
+
+<img src="docs/media/esp32-cam.jpg" width="200" align="right" alt="The ESP32-CAM board with its camera">
+
+**Hardware.** An ESP32-CAM (2 MP OV2640, ~₹620 with its USB adapter, no soldering) runs a tiny
+program: "take a photo" in, one JPEG out, over USB or the phone's hotspot. A 1024×768 photo
+reaches the phone in 0.33 s. Next: the thumb-sized XIAO ESP32S3 on glasses.
+[docs/hardware.md](docs/hardware.md)
+
+**Phone app** (`phone/`, Android). Tap or volume-down to describe; hold to ask, with on-device
+speech-to-text while you speak. About 1.5 s from letting go to the first spoken word, ~₹0.04 a
+photo. History replays every moment with its timeline; Settings picks the model and thinking,
+with measured cost and wait per model; light and dark themes.
+
+<p align="center">
+  <img src="docs/media/app-screens.webp" width="840" alt="App screens: Home, History, a moment, model picker">
+</p>
+
+**Data.** Samples of 7 public datasets (EgoBlind, VizWiz, GuideDog India, Indian currency, Indic
+signboards...), fetched file by file. Our own 232 "moments" (notes, signs, streets, items, our
+own rooms), each with the one line the device should say, 101 checked or rewritten by a person;
+Indian text kept in the original and in English.
+
+**Hill-climbing.** One prompt, judged against the human gold by an LLM, train/dev/test held apart:
+6.2 to 7.8/10 on dev (`moment_v4`, shipped), with failures mined from our own sessions back into
+the set. Then 8 models × thinking on the same set: Gemini 3.5 Flash Lite scores best at the same
+1.3 s; Gemma 4 is fastest (0.6 s); Gemini 4 Argon is most accurate at ~8× the cost.
+[docs/evals.md](docs/evals.md)
+
+**Every session is recorded** and can be replayed with a new prompt or model, or turned into a
+video, without walking again. [Hold-to-ask video with sound](docs/media/phone-ask.mp4) (1:06, 8
+questions); [the first walk](docs/media/phone-walk.mp4) (live mode).
 
 ## Where it stands (Oct 30 2026)
 
-- [x] **Board works over USB** (ESP32-CAM + programmer adapter, no soldering): photos in 0.36 s.
-- [x] **Laptop loop**: photo → brighten → Gemini Flash Lite → spoken, **~1.7 s** end to end.
-- [x] **Android app** (`phone/`): the phone powers the board and speaks into Bluetooth
-      earphones, **~1.9 s** end to end. Photos come over USB, or over the phone's hotspot
-      when the cable only carries power.
-- [x] **One-tap Describe on the phone** (Oct 30): big button or volume-down, 1024×768 photo,
-      the hill-climbed prompt `tools/prompts/moment_v4.txt`, **~1.5 s** to the spoken answer on the
-      phone's hotspot. **Hold to ask**: photo at the press, on-device speech-to-text while held,
-      answer on release (`ask_app_v1.txt`). Live mode is still there.
-- [x] **Evals** ([docs/evals.md](docs/evals.md)): samples of 7 public datasets (EgoBlind, VizWiz,
-      GuideDog India, Indian currency, Indic signboards...); our own 232-moment set with 101
-      human-checked gold lines; prompts hill-climbed from 6.2 to ~8/10 on held-out dev, and
-      failures mined from our own sessions back into the set.
-- [x] Every session is recorded and can be replayed with a new prompt or model, turned into
-      a video like the one above, and graded by a video model, all without walking again.
+- [x] Board over USB and Wi-Fi; laptop loop; Android app with Describe, hold to ask, History, Settings.
+- [x] Evals: public samples, our moments set, prompt hill-climbing, model benchmark.
 - [ ] Collaborator in India: same kit, same steps ([GETTING_STARTED.md](GETTING_STARTED.md)).
-- [ ] Data cable for the phone (USB-C to micro-USB, or an OTG adapter), so photos skip Wi-Fi.
-- [ ] Review the 28 "home" gold drafts; v4.1 (shorter outdoor, fewer "too dark"); test the ask
-      prompt offline; Indian menus, packets and medicine strips from the collaborator.
-- [ ] Better pictures in dim rooms (light, exposure); app keeps running with the screen off.
-- [ ] Log battery use per session; then move to the tiny XIAO ESP32S3 board on glasses.
+- [ ] Data cable for the phone (USB-C to micro-USB, or OTG), so photos skip Wi-Fi.
+- [ ] Review the 28 "home" gold drafts; v4.1 (shorter outdoor, fewer "too dark"); test the ask prompt offline.
+- [ ] Better pictures in dim rooms; keep running with the screen off; battery per session.
 - [ ] Test with blind users. Be My Eyes, Seeing AI and Envision set the bar.
 
-What we learned getting here (prompts, hallucinations, speed, light, Wi-Fi):
-[docs/findings.md](docs/findings.md). Raw timings: [docs/benchmarks.md](docs/benchmarks.md).
-
-## How it works
-
-```text
-board (camera) --USB or Wi-Fi--> laptop or phone --> brighten --> Gemini Flash Lite
-                                                                       |
-                         earphones <-- voice <-- only things not said in the last 8 s
-```
-
-- The board runs a small program that waits for "take a photo" and sends one JPEG back.
-- The model is asked for up to 3 things, most important first (people and hazards), with
-  position, in a few words each, or SILENT if the photo is too dark to be sure.
-- Up to 2 new things are spoken. A phrase is never cut off; the next photo is timed so its
-  answer arrives as the current phrase ends.
-- About ₹0.026 ($0.0003) per photo, roughly ₹1 per minute of use. Spending is capped.
-
-## The working loop
-
-**1. Live:** walk around with it.
-
-```bash
-cd tools && ../.venv-tools/bin/python describe.py
-```
-
-Keys: **l** live on/off, **Space** describe once, **r** photo size, **e** brightening on/off,
-**c** mode, **q** quit. On the phone: **Live**, **Once**, **Connect**.
-
-Every run is saved to `sessions/<date-time>/`: the photos, and `session.jsonl` with the prompt,
-the answer, whether it was spoken (or why not), and when the photo was taken, answered and heard.
-
-**2. Offline:** try a different prompt, model or setting on a recorded session.
-
-```bash
-../.venv-tools/bin/python replay.py items ../sessions/<dir> --enhance=auto   # ~$0.0003/photo
-../.venv-tools/bin/python replay.py items ../sessions/<dir> --prompt="..." --tag=test
-```
-
-Add `--cached` to reuse answers already logged (free). Each replay writes a new session folder.
-
-**3. Feel it:** turn any session into a video like the one above (free, local voice), then have
-a video model review it before sharing:
-
-```bash
-../.venv-tools/bin/python session_video.py ../sessions/<dir> ../videos/<name>.mp4 "Title"
-../.venv-tools/bin/python judge_video.py ../videos/<name>.mp4       # ~$0.02
-```
-
-Video format, the same every time so videos compare side by side: 1280×720; left, the photo as
-taken with a timer; right, the photo being described and how its delay split (camera, model,
-waiting, voice start); bottom, the spoken words while they are spoken. Idle gaps over 6 s (no photo, no speech) are cut to 1.5 s.
-
-Phone sessions: `adb pull /sdcard/Android/data/com.sense.app/files/sessions/ sessions-phone/`.
+What we learned (prompts, hallucinations, speed, light, Wi-Fi): [docs/findings.md](docs/findings.md).
+Timings: [docs/benchmarks.md](docs/benchmarks.md).
 
 ## Layout
 
 | Where | What |
 |---|---|
 | `GETTING_STARTED.md` | from unboxing to hearing it talk |
+| `docs/workflow.md` | how it works; live, replay and video commands |
 | `firmware/blink` | first program: blinks the board's red light |
 | `firmware/camcheck` | checks the camera is attached and working |
 | `firmware/snap` | photo on request over USB (the one to use) |
 | `firmware/snapwifi` | the same plus Wi-Fi; needs `secrets.h` (see `secrets.h.example`) |
 | `tools/describe.py` | the live loop on a laptop |
-| `tools/replay.py`, `session_video.py`, `judge_video.py` | offline: replay, video, review |
+| `tools/replay.py`, `session_video.py`, `moment_timeline.py`, `judge_video.py` | offline: replay, videos, review |
 | `tools/snap.py`, `shoot.py` | one photo; a photo per keypress |
 | `tools/orclient.py` | every paid call: spend cap, ledger, attribution |
 | `tools/enhance.py`, `speak_server.py` | brightening; fast voice on a Mac |
@@ -123,13 +82,40 @@ Phone sessions: `adb pull /sdcard/Android/data/com.sense.app/files/sessions/ ses
 | `tools/prompts/` | prompts, shared by the evals and the phone app (bundled at build time) |
 | `tools/eval_sets.py`, `moments.py`, `climb.py`, `mine_sessions.py`, ... | evals: [docs/evals.md](docs/evals.md) |
 | `phone/` | Android app ([phone/README.md](phone/README.md)) |
-| `docs/` | hardware and buying, findings, benchmarks, example video |
+| `docs/` | hardware and buying, workflow, evals, findings, benchmarks, media |
 | `sessions/`, `videos/`, `photos/`, `backups/`, `data/` | local recordings and eval data (not in git) |
 
 Config: copy `.env.example` to `.env` and add an OpenRouter key. `.env`, `secrets.h` and
 recordings never go into git.
 
+## Future directions
+
+Only added to when the owner asks.
+
+- **Several photos while the user speaks.** In hold-to-ask, the camera takes 0.33 s (median) and the
+  user holds for 1.70 s (median), so a single photo always finishes well before release. The spare
+  time could fit 3–4 more photos, all sent with the question, at a higher model cost. The extra
+  frames could give more detail (choose the sharpest, or combine them) or show motion (what is
+  moving, which way the user is turning).
+- **Blind and low-vision friendly app.** Today the phone app assumes the screen is on, the app is in
+  front, and the user is sighted.
+  - **Hands-free:** describe from an earphone or Bluetooth button with the screen off, so a ₹150
+    selfie remote works as the small companion remote; also Pixel Quick Tap on the back of the phone,
+    and a lock-screen shortcut.
+  - **Works with TalkBack:** asking without a hold (a TalkBack action that stops when you go quiet),
+    short labels, proper tabs and headings, spoken page changes, and no clash between TalkBack and the
+    app's own voice.
+  - **Speech settings:** speech rate, voice, how much detail, Hindi and other Indian languages.
+  - **No visual-only feedback:** consistent sounds and vibrations for listening, thinking, error and
+    camera lost.
+  - Test with TalkBack and Accessibility Scanner, and with real blind and low-vision testers.
+
 ## Rules for agents helping here
+
+- **Setup and day-to-day commands live in [GETTING_STARTED.md](GETTING_STARTED.md) and
+  [docs/workflow.md](docs/workflow.md)**; keep this README to highlights.
+
+- **`## Future directions` is the owner's list.** Add to it only when the owner explicitly asks.
 
 - **Check in software before asking for any physical step.** Probe the board first
   (`esptool chip-id`, `firmware/camcheck`); only ask for hands-on work if a probe fails.

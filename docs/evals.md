@@ -65,6 +65,32 @@ v3 was silent on our own indoor frames (a man in front, a rod at head height, a 
 category. v4 adds an indoor branch and "close obstacle first"; it fixes 22 of the 28.
 Known v4 issues: says "Too dark to see" too readily; outdoor replies run long (~25 words).
 
+## Round 4: models and thinking (Oct 30)
+
+`moment_v4` at 1024 px on the 21 dev moments, judged by Haiku 5.5 (also a contestant; small set,
+so differences under ~0.5 are noise). Latency is request to answer; cost is measured.
+
+| Model, thinking | Score | Critical | Words | Median s | p90 s | $ / 1000 |
+|---|---|---|---|---|---|---|
+| Gemini 4 Argon, low | **7.86** | 0 | 10 | 4.57 | 8.00 | 3.79 |
+| Gemini 3.5 Flash Lite, low | 7.38 | 1 | 5 | 1.30 | 1.89 | 0.61 |
+| Gemini 3.1 Flash Lite, low | 7.29 | 1 | 3 | 1.82 | 2.17 | 0.64 |
+| Gemini 3.1 Flash Lite, none (shipped) | 7.05 | 1 | 6 | 1.28 | 1.44 | 0.46 |
+| Qwen 3.8 Flash, none | 7.05 | 0 | 5 | 2.65 | 7.30 | 0.13 |
+| Gemma 4 31B, none | 6.90 | 2 | 3 | **0.64** | 0.95 | 0.42 |
+| Claude Haiku 5.5, low | 6.90 | 0 | 13 | 4.43 | 8.32 | 0.27 |
+| Qwen 3.8 Flash, low | 6.81 | 2 | 5 | 6.17 | 23.35 | 0.37 |
+| GPT-6 Luna, none | 6.57 | 2 | 5 | 2.41 | 3.53 | 0.17 |
+| Gemma 4 31B, low | 6.57 | 2 | 3 | 4.20 | 8.47 | 1.10 |
+| Claude Haiku 5.5, none | 6.33 | 1 | 13 | 1.91 | 3.00 | 0.20 |
+| GPT-6 Luna, low | 6.29 | 3 | 7 | 4.64 | 5.66 | 0.22 |
+| GPT-5 nano, low | 4.57 | 5 | 7 | 8.00 | 12.69 | 0.25 |
+
+Gemini 3.5 Flash Lite, GPT-5 nano and Argon can't run with thinking "none" (OpenRouter returns 400);
+the app falls back to "low". The app's model list keeps four: 3.1 Flash Lite, 3.5 Flash Lite
+(best quality at the same speed), Gemma 4 (fastest), Argon (best, ~8x the cost and 3x slower).
+The prompt was tuned on Gemini, which favours it.
+
 ## Shipped on the phone (Oct 30)
 
 - Tap: `moment_v4.txt` at 1024×768, ~1.5 s to voice on the hotspot.

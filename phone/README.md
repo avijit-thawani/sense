@@ -9,7 +9,9 @@ Screen: one big **Describe** button (or the **volume-down** key): beep + buzz, a
 whole answer spoken at once (~1.5 s on the hotspot). **Hold** the button or volume-down to ask:
 a low tone, the photo is taken at once, on-device speech-to-text listens while you hold; on release
 the question + photo go to the model with `tools/prompts/ask_app_v1.txt` (`ask_prompt` in config) and
-the answer is spoken. Logged as `mode: "ask"` with the `question`. Small **Live** (the old continuous items mode,
+the answer is spoken. Logged as `mode: "ask"` with the `question`. Debug: `"record_question_audio": true`
+(Android 13+) records the mic itself, pipes the same audio to speech-to-text, and saves `<photo>.wav`
+(16 kHz mono) next to the photo, logged as `question_audio` + `question_audio_start_at`. Small **Live** (the old continuous items mode,
 640×480) and **Reconnect** buttons; last answer, photo and log below. Plugging the board in opens
 the app and grants USB access. Needs a USB-C to micro-USB *data* cable (or OTG adapter), or the
 board on the phone's hotspot (`firmware/snapwifi` prefers the hotspot over home Wi-Fi).

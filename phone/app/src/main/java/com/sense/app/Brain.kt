@@ -28,7 +28,11 @@ object Brain {
         "bottom top upper lower middle side straight forward slightly centered edge nearby below above")
         .split(" ").toSet()
 
-    data class Answer(val text: String, val seconds: Double, val costUsd: Double)
+    /** Told when a model rejected reasoning "none" (the call is retried with "low"). */
+    var onThinkingRequired: ((String) -> Unit)? = null
+
+    data class Answer(val text: String, val seconds: Double, val costUsd: Double,
+                      val tokensIn: Int = 0, val tokensOut: Int = 0, val reasoningTokens: Int = 0)
 
     /** Contrast stretch (1% per channel) then gamma-lift dark frames toward mean 0.45, like enhance.py "auto". */
     fun brighten(jpeg: ByteArray): ByteArray {
@@ -66,13 +70,14 @@ object Brain {
         return ByteArrayOutputStream().also { out.compress(Bitmap.CompressFormat.JPEG, 90, it) }.toByteArray()
     }
 
-    fun describe(jpeg: ByteArray, key: String, model: String, prompt: String = PROMPT, maxTokens: Int = 80): Answer {
+    fun describe(jpeg: ByteArray, key: String, model: String, prompt: String = PROMPT, maxTokens: Int = 80,
+                 reasoning: String = "none"): Answer {
         val image = "data:image/jpeg;base64," + Base64.encodeToString(jpeg, Base64.NO_WRAP)
         val body = JSONObject()
             .put("model", model)
             .put("max_tokens", maxTokens)
             .put("provider", JSONObject().put("sort", "latency"))
-            .put("reasoning", JSONObject().put("effort", "none"))
+            .put("reasoning", JSONObject().put("effort", reasoning))
             .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", JSONArray()
                 .put(JSONObject().put("type", "text").put("text", prompt))
                 .put(JSONObject().put("type", "image_url").put("image_url", JSONObject().put("url", image))))))
@@ -90,11 +95,17 @@ object Brain {
         val code = conn.responseCode
         val text = (if (code in 200..299) conn.inputStream else conn.errorStream).bufferedReader().readText()
         val secs = (System.nanoTime() - t0) / 1e9
+        if (code == 400 && reasoning == "none" && "Reasoning is mandatory" in text) {
+            onThinkingRequired?.invoke(model)
+            return describe(jpeg, key, model, prompt, Models.maxTokens(maxTokens, "low"), "low")
+        }
         if (code !in 200..299) throw IllegalStateException("HTTP $code: ${text.take(200)}")
         val json = JSONObject(text)
-        val answer = json.getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content").trim()
-        val cost = json.optJSONObject("usage")?.optDouble("cost", 0.0) ?: 0.0
-        return Answer(answer, secs, cost)
+        val answer = json.getJSONArray("choices").getJSONObject(0).getJSONObject("message").optString("content").trim()
+        val usage = json.optJSONObject("usage")
+        return Answer(answer, secs, usage?.optDouble("cost", 0.0) ?: 0.0,
+            usage?.optInt("prompt_tokens") ?: 0, usage?.optInt("completion_tokens") ?: 0,
+            usage?.optJSONObject("completion_tokens_details")?.optInt("reasoning_tokens") ?: 0)
     }
 
     private fun words(text: String) =
