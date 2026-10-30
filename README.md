@@ -11,26 +11,42 @@ vision model and speaks a few words: "Person ahead, close. Chair left."
 a micro-USB data cable, a laptop, and an [OpenRouter](https://openrouter.ai) key (the AI that
 describes the photos; about ₹1 per minute).
 
-![first walk with the phone app](docs/media/phone-walk-preview.webp)
+![hold to ask on the phone](docs/media/phone-ask-preview.webp)
 
-[Full video with sound](docs/media/phone-walk.mp4) (40 s): the first walk with the phone app. Idle stretches longer than 6 s are cut to a short "skipped" card.
+**Oct 30: tap to describe, hold to ask.** [Full video with sound](docs/media/phone-describe-ask.mp4)
+(2:41): 15 one-tap descriptions (median 1.4 s photo to voice), then 8 spoken questions ("Where's
+my bottle?", "What gloves color?"). Questions are re-voiced; the phone records no audio. A video
+model's review: [8/10](docs/media/phone-describe-ask.judge.json), timeliness 5/5. Confirmed misses:
+"citizenM" read as "Citizen", a radiator called a shelf, a cropped "fairlife" as "Airlife", an
+illegible laptop screen read anyway, and "What location?" not answered from a map. (Its call that
+"Well begun is half done" was invented is wrong: the cover says "WELL BEGUN".)
+
+[Earlier: the first walk](docs/media/phone-walk.mp4) (40 s), live mode. Idle stretches longer than 6 s are cut to a short "skipped" card.
 Left, each photo as it was taken; right, what was being spoken and how long ago that photo
 was taken (about 1.9 s); bottom, the words heard. A video model's review of it is in
 [phone-walk.judge.json](docs/media/phone-walk.judge.json) (8/10).
 
-## Where it stands (Oct 28 2026)
+## Where it stands (Oct 30 2026)
 
 - [x] **Board works over USB** (ESP32-CAM + programmer adapter, no soldering): photos in 0.36 s.
 - [x] **Laptop loop**: photo → brighten → Gemini Flash Lite → spoken, **~1.7 s** end to end.
 - [x] **Android app** (`phone/`): the phone powers the board and speaks into Bluetooth
       earphones, **~1.9 s** end to end. Photos come over USB, or over the phone's hotspot
       when the cable only carries power.
+- [x] **One-tap Describe on the phone** (Oct 30): big button or volume-down, 1024×768 photo,
+      the hill-climbed prompt `tools/prompts/moment_v4.txt`, **~1.5 s** to the spoken answer on the
+      phone's hotspot. **Hold to ask**: photo at the press, on-device speech-to-text while held,
+      answer on release (`ask_app_v1.txt`). Live mode is still there.
+- [x] **Evals** ([docs/evals.md](docs/evals.md)): samples of 7 public datasets (EgoBlind, VizWiz,
+      GuideDog India, Indian currency, Indic signboards...); our own 232-moment set with 101
+      human-checked gold lines; prompts hill-climbed from 6.2 to ~8/10 on held-out dev, and
+      failures mined from our own sessions back into the set.
 - [x] Every session is recorded and can be replayed with a new prompt or model, turned into
       a video like the one above, and graded by a video model, all without walking again.
 - [ ] Collaborator in India: same kit, same steps ([GETTING_STARTED.md](GETTING_STARTED.md)).
 - [ ] Data cable for the phone (USB-C to micro-USB, or an OTG adapter), so photos skip Wi-Fi.
-- [ ] Push-to-talk questions: hold a button, ask "what does this sign say?", get an answer
-      from the current photo; descriptions pause while you talk.
+- [ ] Review the 28 "home" gold drafts; v4.1 (shorter outdoor, fewer "too dark"); test the ask
+      prompt offline; Indian menus, packets and medicine strips from the collaborator.
 - [ ] Better pictures in dim rooms (light, exposure); app keeps running with the screen off.
 - [ ] Log battery use per session; then move to the tiny XIAO ESP32S3 board on glasses.
 - [ ] Test with blind users. Be My Eyes, Seeing AI and Envision set the bar.
@@ -105,9 +121,11 @@ Phone sessions: `adb pull /sdcard/Android/data/com.sense.app/files/sessions/ ses
 | `tools/orclient.py` | every paid call: spend cap, ledger, attribution |
 | `tools/enhance.py`, `speak_server.py` | brightening; fast voice on a Mac |
 | `tools/bench_*.py`, `phone_bench.sh` | timing measurements |
+| `tools/prompts/` | prompts, shared by the evals and the phone app (bundled at build time) |
+| `tools/eval_sets.py`, `moments.py`, `climb.py`, `mine_sessions.py`, ... | evals: [docs/evals.md](docs/evals.md) |
 | `phone/` | Android app ([phone/README.md](phone/README.md)) |
 | `docs/` | hardware and buying, findings, benchmarks, example video |
-| `sessions/`, `videos/`, `photos/`, `backups/` | local recordings (not in git) |
+| `sessions/`, `videos/`, `photos/`, `backups/`, `data/` | local recordings and eval data (not in git) |
 
 Config: copy `.env.example` to `.env` and add an OpenRouter key. `.env`, `secrets.h` and
 recordings never go into git.

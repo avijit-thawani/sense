@@ -66,15 +66,15 @@ object Brain {
         return ByteArrayOutputStream().also { out.compress(Bitmap.CompressFormat.JPEG, 90, it) }.toByteArray()
     }
 
-    fun describe(jpeg: ByteArray, key: String, model: String): Answer {
+    fun describe(jpeg: ByteArray, key: String, model: String, prompt: String = PROMPT, maxTokens: Int = 80): Answer {
         val image = "data:image/jpeg;base64," + Base64.encodeToString(jpeg, Base64.NO_WRAP)
         val body = JSONObject()
             .put("model", model)
-            .put("max_tokens", 80)
+            .put("max_tokens", maxTokens)
             .put("provider", JSONObject().put("sort", "latency"))
             .put("reasoning", JSONObject().put("effort", "none"))
             .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", JSONArray()
-                .put(JSONObject().put("type", "text").put("text", PROMPT))
+                .put(JSONObject().put("type", "text").put("text", prompt))
                 .put(JSONObject().put("type", "image_url").put("image_url", JSONObject().put("url", image))))))
         val t0 = System.nanoTime()
         val conn = URL("https://openrouter.ai/api/v1/chat/completions").openConnection() as HttpURLConnection

@@ -7,13 +7,29 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.BitmapFactory
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.hardware.usb.UsbManager
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.Manifest
+import android.content.pm.PackageManager
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import android.view.MotionEvent
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.view.Gravity
+import android.view.KeyEvent
+import android.view.View
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.ImageView
@@ -44,7 +60,30 @@ class MainActivity : Activity() {
     private lateinit var log: TextView
     private lateinit var photoView: ImageView
     private lateinit var liveButton: Button
+    private lateinit var describeButton: Button
+    private lateinit var answerView: TextView
     private lateinit var tts: TextToSpeech
+    private val tone by lazy { ToneGenerator(AudioManager.STREAM_MUSIC, 50) }
+    @Volatile private var looking = false
+    private var momentPromptFile = "moment_v4.txt"
+    private var momentPrompt = ""
+    private var onceSize = 'g'
+    @Volatile private var boardSize = ' '
+
+    // Hold to ask: photo at the start of the hold, speech-to-text while held, answer on release.
+    private class Shot(val jpeg: ByteArray, val t0: Long, val camS: Double, val photo: String, val link: String)
+    private var askPromptFile = "ask_app_v1.txt"
+    private var askPrompt = ""
+    private var recognizer: SpeechRecognizer? = null
+    @Volatile private var askCapture = false
+    @Volatile private var listening = false
+    private var askShot: Shot? = null
+    private var askCameraFailed = false
+    private var question: String? = null
+    private var partial = ""
+    private var heldByKey = false
+    private var holdStarted = false
+    private val holdToAsk = Runnable { holdStarted = true; startAsk() }
 
     private var board: Camera? = null
     private var boardIp = ""
@@ -91,24 +130,236 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         live = false
         unregisterReceiver(usbPermission)
+        recognizer?.destroy()
         tts.shutdown()
         runCatching { port?.close() }
         super.onDestroy()
     }
 
+    private fun rounded(color: Int, radius: Float) = GradientDrawable().apply { setColor(color); cornerRadius = radius }
+
+    /** One big Describe button (also the volume-down key), the last answer in large type, and small
+     *  Live / Reconnect controls. High contrast and TalkBack labels, for low-vision and blind use. */
     private fun buildUi() {
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 160, 24, 24) }
-        status = TextView(this).apply { textSize = 16f }
-        val row = LinearLayout(this)
-        liveButton = Button(this).apply { text = "Live"; setOnClickListener { toggleLive() } }
-        val onceButton = Button(this).apply { text = "Once"; setOnClickListener { once = true } }
-        val connectButton = Button(this).apply { text = "Connect"; setOnClickListener { connect() } }
-        row.addView(liveButton); row.addView(onceButton); row.addView(connectButton)
-        photoView = ImageView(this).apply { adjustViewBounds = true }
-        log = TextView(this).apply { textSize = 13f }
-        root.addView(status); root.addView(row); root.addView(photoView)
-        root.addView(ScrollView(this).apply { addView(log) })
+        val dp = resources.displayMetrics.density
+        val bg = Color.rgb(12, 12, 14)
+        val accent = Color.rgb(255, 204, 0)
+        window.statusBarColor = bg
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(bg)
+            setPadding((18 * dp).toInt(), (44 * dp).toInt(), (18 * dp).toInt(), (18 * dp).toInt())
+        }
+        status = TextView(this).apply {
+            textSize = 14f; setTextColor(Color.rgb(160, 160, 168)); text = "Starting…"
+        }
+        describeButton = Button(this).apply {
+            text = "Describe"
+            textSize = 40f
+            isAllCaps = false
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.BLACK)
+            background = rounded(accent, 36 * dp)
+            contentDescription = "Describe what is in front of me. Hold to ask a question. Volume down works the same way."
+            // Tap = describe. Hold (over 0.4 s) = ask: speak while holding, release to send.
+            setOnTouchListener { v, e ->
+                when (e.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> { holdStarted = false; ui.postDelayed(holdToAsk, 400) }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        ui.removeCallbacks(holdToAsk)
+                        if (holdStarted) endAsk()
+                        else if (e.actionMasked == MotionEvent.ACTION_UP) { v.performClick() }
+                    }
+                }
+                true
+            }
+            setOnClickListener { requestDescribe() }
+        }
+        answerView = TextView(this).apply {
+            textSize = 24f
+            setTextColor(Color.WHITE)
+            setPadding(0, (16 * dp).toInt(), 0, (8 * dp).toInt())
+            text = "Tap to describe. Hold to ask a question. Volume down works too."
+        }
+        photoView = ImageView(this).apply {
+            adjustViewBounds = true
+            maxHeight = (150 * dp).toInt()
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        fun small(label: String, onClick: () -> Unit) = Button(this).apply {
+            text = label; textSize = 16f; isAllCaps = false
+            setTextColor(Color.WHITE)
+            background = rounded(Color.rgb(44, 44, 50), 18 * dp)
+            setOnClickListener { onClick() }
+        }
+        liveButton = small("Live: off") { toggleLive() }
+        val reconnect = small("Reconnect") { board = null; connect() }
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, (12 * dp).toInt(), 0, 0)
+            addView(liveButton, LinearLayout.LayoutParams(0, (52 * dp).toInt(), 1f).apply { marginEnd = (10 * dp).toInt() })
+            addView(reconnect, LinearLayout.LayoutParams(0, (52 * dp).toInt(), 1f))
+        }
+        log = TextView(this).apply { textSize = 11f; setTextColor(Color.rgb(110, 110, 118)) }
+        root.addView(status)
+        root.addView(describeButton, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.6f)
+            .apply { topMargin = (14 * dp).toInt() })
+        root.addView(answerView)
+        root.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.TOP
+            addView(photoView, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(ScrollView(this@MainActivity).apply { addView(log) },
+                LinearLayout.LayoutParams(0, (150 * dp).toInt(), 1f).apply { marginStart = (10 * dp).toInt() })
+        })
+        root.addView(row)
         setContentView(root)
+    }
+
+    // Volume-down: press = describe, hold = ask (same as the big button).
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (keyCode != KeyEvent.KEYCODE_VOLUME_DOWN) return super.onKeyDown(keyCode, event)
+        if (event.repeatCount == 0) { heldByKey = false; event.startTracking() }
+        return true
+    }
+
+    override fun onKeyLongPress(keyCode: Int, event: KeyEvent): Boolean {
+        if (keyCode != KeyEvent.KEYCODE_VOLUME_DOWN) return super.onKeyLongPress(keyCode, event)
+        heldByKey = true
+        startAsk()
+        return true
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        if (keyCode != KeyEvent.KEYCODE_VOLUME_DOWN) return super.onKeyUp(keyCode, event)
+        if (heldByKey) endAsk() else if (!event.isCanceled) requestDescribe()
+        heldByKey = false
+        return true
+    }
+
+    // --- ask ---------------------------------------------------------------------------------
+
+    private fun startAsk() {
+        if (looking) return
+        if (board == null) { say("Camera not connected.", "status"); connect(); return }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1)
+            say("Allow the microphone, then hold again to ask.", "status")
+            return
+        }
+        looking = true
+        tts.stop()
+        synchronized(this) { pendingSpeech = null; speaking = false }
+        askShot = null; askCameraFailed = false; question = null; partial = ""
+        askCapture = true                       // the camera loop takes the photo right away
+        buzz(60); tone.startTone(ToneGenerator.TONE_PROP_BEEP2, 120)
+        ui.post { describeButton.text = "Listening…"; describeButton.alpha = 0.6f; answerView.text = "…" }
+        listening = true
+        val r = recognizer ?: newRecognizer().also { recognizer = it }
+        r.setRecognitionListener(listener)
+        r.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+            .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 4000L)
+            .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 4000L))
+    }
+
+    private fun endAsk() {
+        if (!listening) return
+        listening = false
+        tone.startTone(ToneGenerator.TONE_PROP_PROMPT, 80)
+        ui.post { describeButton.text = "Thinking…" }
+        recognizer?.stopListening()            // the final result arrives in onResults
+    }
+
+    private fun newRecognizer(): SpeechRecognizer =
+        if (Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(this))
+            SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
+        else SpeechRecognizer.createSpeechRecognizer(this)
+
+    private val listener = object : RecognitionListener {
+        override fun onResults(b: Bundle?) {
+            val text = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
+            question = text.ifBlank { partial }
+            listening = false
+            tryAnswer()
+        }
+        override fun onPartialResults(b: Bundle?) {
+            b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let {
+                if (it.isNotBlank()) { partial = it; ui.post { answerView.text = "“$it”" } }
+            }
+        }
+        override fun onError(error: Int) {
+            show("speech error $error")
+            question = partial          // whatever was heard before the error, maybe nothing
+            listening = false
+            tryAnswer()
+        }
+        override fun onReadyForSpeech(p: Bundle?) {}
+        override fun onBeginningOfSpeech() {}
+        override fun onRmsChanged(v: Float) {}
+        override fun onBufferReceived(b: ByteArray?) {}
+        override fun onEndOfSpeech() {}
+        override fun onEvent(t: Int, p: Bundle?) {}
+    }
+
+    /** Runs when the question or the photo arrives; acts once both are in. Main thread only. */
+    private fun tryAnswer() = ui.post {
+        if (!looking || listening) return@post
+        val q = question ?: return@post
+        if (askCameraFailed) { say("Camera didn't answer. Try again.", "status"); doneLooking("Camera didn't answer."); return@post }
+        val shot = askShot ?: return@post
+        question = null
+        if (q.isBlank()) { say("Didn't catch the question.", "status"); doneLooking("Didn't catch the question."); return@post }
+        answerView.text = "“$q”"
+        net.execute { answer(q, shot) }
+    }
+
+    private fun answer(q: String, s: Shot) {
+        var heard = ""
+        try {
+            val jpeg = Brain.brighten(s.jpeg)
+            ui.post { photoView.setImageBitmap(BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)) }
+            val a = Brain.describe(jpeg, key, model, askPrompt.replace("{q}", q.replace("\"", "'")), maxTokens = 200)
+            addSpent(a.costUsd)
+            heard = a.text
+            buzz(20)
+            tts.speak(heard, TextToSpeech.QUEUE_FLUSH, null, "${s.t0}|${s.photo}")
+            logRow(JSONObject().put("photo", s.photo).put("mode", "ask").put("question", q)
+                .put("size", sizeOf(onceSize)).put("captured_at", iso.format(Date(s.t0)))
+                .put("answered_at", iso.format(Date())).put("camera_s", s.camS).put("enhance", "auto")
+                .put("model_s", a.seconds).put("cost_usd", a.costUsd).put("status", "spoken")
+                .put("text", a.text).put("spoken_text", heard).put("prompt_file", askPromptFile)
+                .put("device", "android").put("link", s.link))
+            show("[ask: cam ${"%.2f".format(s.camS)}s + model ${"%.2f".format(a.seconds)}s] Q: $q → $heard")
+        } catch (e: Exception) {
+            heard = "Couldn't answer: ${e.message?.take(60)}"
+            say("Couldn't reach the describer. Try again.", "status")
+            show("model: ${e.message}")
+        } finally {
+            doneLooking(if (heard.isEmpty()) "" else "Q: $q\n$heard")
+        }
+    }
+
+    private fun requestDescribe() {
+        if (looking) return
+        if (board == null) { say("Camera not connected.", "status"); connect(); return }
+        looking = true
+        buzz(30); tone.startTone(ToneGenerator.TONE_PROP_BEEP, 70)
+        ui.post { describeButton.text = "Looking…"; describeButton.alpha = 0.6f }
+        once = true
+    }
+
+    private fun buzz(ms: Long) {
+        val v = getSystemService(VIBRATOR_SERVICE) as Vibrator
+        v.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
+    }
+
+    private fun doneLooking(answer: String) = ui.post {
+        looking = false
+        describeButton.text = "Describe"; describeButton.alpha = 1f
+        answerView.text = answer
     }
 
     private fun show(msg: String) = ui.post {
@@ -125,7 +376,12 @@ class MainActivity : Activity() {
             budgetUsd = c.optDouble("budget_usd", budgetUsd)
             size = c.optString("size", "v").firstOrNull() ?: 'v'
             boardIp = c.optString("board_ip", "")
+            momentPromptFile = c.optString("moment_prompt", momentPromptFile)
+            onceSize = c.optString("once_size", "g").firstOrNull() ?: 'g'
+            askPromptFile = c.optString("ask_prompt", askPromptFile)
         }
+        momentPrompt = assets.open(momentPromptFile).bufferedReader().readText().trim()
+        askPrompt = assets.open(askPromptFile).bufferedReader().readText().trim()
         if (key.isEmpty()) setStatus("No API key: push openrouter_key.txt over adb (phone/README.md)")
     }
 
@@ -172,6 +428,7 @@ class MainActivity : Activity() {
                 b.drain()
                 b.send(size); Thread.sleep(300); b.drain()
                 runCatching { b.grab() }
+                boardSize = size
                 port = p; board = b
                 setStatus("Board connected. ${"%.3f".format(spent())} of $$budgetUsd spent. Model: $model")
             } catch (e: Exception) {
@@ -188,9 +445,9 @@ class MainActivity : Activity() {
         Thread {
             try {
                 val w = WifiBoard(boardIp)
-                w.setSize(sizeName().let { mapOf("320x240" to "qvga", "1024x768" to "xga",
-                    "800x600" to "svga", "1600x1200" to "uxga")[it] ?: "vga" })
+                w.setSize(wifiSizeName(size))
                 w.grab()
+                boardSize = size
                 board = w
                 setStatus("Board on Wi-Fi ($boardIp); USB is power only. " +
                     "${"%.3f".format(spent())} of $$budgetUsd spent. Model: $model")
@@ -206,8 +463,21 @@ class MainActivity : Activity() {
 
     private fun toggleLive() {
         live = !live
-        liveButton.text = if (live) "Stop" else "Live"
+        liveButton.text = if (live) "Live: on" else "Live: off"
+        say(if (live) "Live on" else "Live off", "status")
         if (live && sessionDir == null) newSession()
+    }
+
+    private fun wifiSizeName(c: Char) = when (c) { 's' -> "qvga"; 'g' -> "xga"; 'x' -> "svga"; 'u' -> "uxga"; else -> "vga" }
+
+    /** Switch the board's resolution only when it differs (one-shot uses a larger frame than live). */
+    private fun ensureSize(b: Camera, want: Char) {
+        if (boardSize == want) return
+        when (b) {
+            is WifiBoard -> b.setSize(wifiSizeName(want))
+            is Board -> { b.send(want); Thread.sleep(300); b.drain() }
+        }
+        boardSize = want
     }
 
     private fun newSession() {
@@ -229,14 +499,45 @@ class MainActivity : Activity() {
                 ui.post { connect() }
             }
             val b = board
-            val go = once || (live && readyForNext())
-            if (b == null || !go || key.isEmpty()) { Thread.sleep(30); continue }
+            if (askCapture && b != null) {        // hold-to-ask: photo first, while the user speaks
+                askCapture = false
+                try {
+                    ensureSize(b, onceSize)
+                    val t0 = System.currentTimeMillis()
+                    val jpeg = b.grab()
+                    val camS = (System.currentTimeMillis() - t0) / 1000.0
+                    if (sessionDir == null) newSession()
+                    val photo = stamp.format(Date(t0)) + "-${(t0 / 100) % 10}.jpg"
+                    File(sessionDir, photo).writeBytes(jpeg)
+                    askShot = Shot(jpeg, t0, camS, photo, b.link)
+                } catch (e: Exception) {
+                    show("camera: ${e.message}")
+                    askCameraFailed = true
+                    if (b is WifiBoard) board = null
+                }
+                tryAnswer()
+                continue
+            }
+            val single = once
+            val go = single || (live && !looking && readyForNext())
+            if (b == null || !go || key.isEmpty()) {
+                if (single && key.isEmpty()) { once = false; doneLooking("No API key on the phone.") }
+                Thread.sleep(30); continue
+            }
             once = false
             if (sessionDir == null) newSession()
-            if (spent() >= budgetUsd) { setStatus("Spend cap $$budgetUsd reached (config.json)"); live = false; continue }
+            if (spent() >= budgetUsd) {
+                setStatus("Spend cap $$budgetUsd reached (config.json)"); live = false
+                if (single) { say("Spend cap reached.", "status"); doneLooking("Spend cap reached.") }
+                continue
+            }
             val t0 = System.currentTimeMillis()
-            val jpeg = try { b.grab() } catch (e: Exception) {
+            val jpeg = try {
+                ensureSize(b, if (single) onceSize else size)
+                b.grab()
+            } catch (e: Exception) {
                 show("camera: ${e.message}")
+                if (single) { say("Camera didn't answer. Try again.", "status"); doneLooking("Camera didn't answer.") }
                 if (b is WifiBoard) { board = null; Thread.sleep(1000) }  // reconnect
                 continue
             }
@@ -245,9 +546,43 @@ class MainActivity : Activity() {
             File(sessionDir, photo).writeBytes(jpeg)
             inFlight = true
             val link = b.link
-            net.execute { ask(jpeg, t0, camS, photo, link) }
+            if (single) net.execute { askMoment(jpeg, t0, camS, photo, link) }
+            else net.execute { ask(jpeg, t0, camS, photo, link) }
         }
     }
+
+    /** One-shot: the hill-climbed moment prompt, the whole answer spoken at once (interrupting). */
+    private fun askMoment(raw: ByteArray, capturedAt: Long, camS: Double, photo: String, link: String) {
+        var heard = ""
+        try {
+            val jpeg = Brain.brighten(raw)
+            ui.post { photoView.setImageBitmap(BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)) }
+            val a = Brain.describe(jpeg, key, model, momentPrompt, maxTokens = 150)
+            addSpent(a.costUsd)
+            val now = System.currentTimeMillis()
+            heard = if (a.text.trim(' ', '.', '"', '\'').uppercase() == "SILENT") "Nothing notable." else a.text
+            buzz(20)
+            synchronized(this) { pendingSpeech = null; speaking = false }
+            tts.speak(heard, TextToSpeech.QUEUE_FLUSH, null, "$capturedAt|$photo")
+            logRow(JSONObject().put("photo", photo).put("mode", "moment").put("size", sizeOf(onceSize))
+                .put("captured_at", iso.format(Date(capturedAt))).put("answered_at", iso.format(Date(now)))
+                .put("camera_s", camS).put("enhance", "auto").put("model_s", a.seconds)
+                .put("cost_usd", a.costUsd).put("status", "spoken").put("text", a.text)
+                .put("spoken_text", heard).put("prompt_file", momentPromptFile)
+                .put("device", "android").put("link", link))
+            show("[once: cam ${"%.2f".format(camS)}s + model ${"%.2f".format(a.seconds)}s] $heard")
+            setStatus("${if (link == "wifi") "Camera on Wi-Fi" else "Camera on USB"} · ${"%.3f".format(spent())} of $$budgetUsd spent")
+        } catch (e: Exception) {
+            heard = "Couldn't describe: ${e.message?.take(60)}"
+            say("Couldn't reach the describer. Try again.", "status")
+            show("model: ${e.message}")
+        } finally {
+            inFlight = false
+            doneLooking(heard)
+        }
+    }
+
+    private fun sizeOf(c: Char) = when (c) { 's' -> "320x240"; 'g' -> "1024x768"; 'x' -> "800x600"; 'u' -> "1600x1200"; else -> "640x480" }
 
     private fun ask(raw: ByteArray, capturedAt: Long, camS: Double, photo: String, link: String) {
         try {

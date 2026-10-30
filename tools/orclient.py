@@ -72,7 +72,7 @@ def call(content, model, body=None, log=None, timeout=30):
     if not r.ok:
         raise RuntimeError(f"HTTP {r.status_code}: {r.text[:300]}")
     payload = r.json()
-    text = payload["choices"][0]["message"]["content"].strip()
+    text = (payload["choices"][0]["message"]["content"] or "").strip()
     usage = payload.get("usage") or {}
     cost = usage.get("cost") or 0
     cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens")

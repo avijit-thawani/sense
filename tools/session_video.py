@@ -1,10 +1,12 @@
 """Rebuilds a live session as a video: photos when taken, captions when answered,
 the same `say` voice when it actually spoke, so viewers feel the real lag.
 
-Usage: session_video.py SESSION_DIR OUT.mp4 ["Title line"] [--voice-startup=SECONDS]
+Usage: session_video.py SESSION_DIR OUT.mp4 ["Title line"] [--voice-startup=SECONDS] [--subtitle=TEXT]
   --voice-startup simulates a different speech engine (0.10 = persistent NSSpeechSynthesizer,
   measured Oct 28); the default is `say` per phrase.
 Uses spoken_at when logged; otherwise schedules speech like the live speaker did.
+Hold-to-ask rows (mode "ask") show "You asked" from the press until the answer; the question is
+re-voiced in a second voice (the user's own audio isn't recorded).
 Free: no model calls, the voice is the local macOS `say`.
 """
 import datetime as dt
@@ -25,6 +27,8 @@ SAY_WPM = 230
 SAY_STARTUP_S = 0.95
 FONT = "/System/Library/Fonts/Helvetica.ttc"
 INTRO_S = 3.0
+SUBTITLE = "ESP32-CAM over USB  >  Gemini 3.1 Flash Lite  >  macOS voice"
+QUESTION_VOICE = "Samantha"   # re-voices the user's question, distinct from the device voice
 
 
 def font(size, bold=False):
@@ -51,8 +55,19 @@ def load(folder):
                        "camera_s": r.get("camera_s") or 0, "model_s": r.get("model_s") or 0,
                        "spoke_logged": spoken_at.get(r["photo"]),
                        "audio_logged": audio_at.get(r["photo"]),
-                       "text": r.get("spoken_text") or r["text"]})
+                       "text": r.get("spoken_text") or r["text"],
+                       "question": r.get("question") if r.get("mode") == "ask" else None})
     return events
+
+
+def question_audio(events, tmp):
+    """The user's question in a second voice, from the moment they pressed (photo taken)."""
+    for i, e in enumerate(events):
+        if not e["question"]:
+            continue
+        aiff = os.path.join(tmp, f"q{i}.aiff")
+        subprocess.run(["say", "-v", QUESTION_VOICE, "-r", "200", "-o", aiff, e["question"]], check=True)
+        e["q_audio"] = aiff
 
 
 def tts(events, tmp):
@@ -140,11 +155,11 @@ def frame(t, events, t0, photos, title, skips=()):
                font=font(16), fill=(200, 200, 200))
         img.paste(photos[e["photo"]].resize((280, 210)), (x, 80))
         other = e["answered"] - e["captured"] - e["camera_s"] - e["model_s"]
-        steps = [("camera + USB", e["camera_s"]), ("model", e["model_s"]),
+        steps = [("camera", e["camera_s"]), ("model", e["model_s"]),
                  ("queued behind speech", e["launched"] - e["answered"]),
                  ("voice startup", e["spoke"] - e["launched"])]
         if other > 0.05:
-            steps.insert(2, ("other", other))
+            steps.insert(1, ("you speaking" if e["question"] else "other", other))
         for i, (label, s) in enumerate(steps):
             d.text((x, 298 + 20 * i), f"{label:<22}", font=font(15), fill=(170, 170, 170))
             d.text((x + 200, 298 + 20 * i), f"{s:4.1f}s", font=font(15), fill=(170, 170, 170))
@@ -159,22 +174,34 @@ def frame(t, events, t0, photos, title, skips=()):
             d.text((40, top + 44 * i), line, font=cap, fill=(255, 255, 255))
     else:
         d.text((x, 52), "(silence)", font=font(16), fill=(140, 140, 140))
+    asking = [e for e in events if e["question"] and e["captured"] <= t < e["spoke"] + e["dur"]]
+    if asking:
+        q = asking[-1]
+        f = font(30, True)
+        lines = wrap(d, f"You asked: \u201c{q['question']}\u201d", f, 900)
+        d.rectangle((0, 56, 960, 66 + 40 * len(lines)), fill=(255, 204, 0))
+        for i, line in enumerate(lines):
+            d.text((22, 60 + 40 * i), line, font=f, fill=(0, 0, 0))
     if t - t0 < INTRO_S:
         d.rectangle((0, 0, W, H), fill=(16, 16, 20))
         d.text((80, 250), title, font=font(52, True), fill=(255, 255, 255))
-        d.text((80, 330), "ESP32-CAM over USB  >  Gemini 3.1 Flash Lite  >  macOS voice",
-               font=font(28), fill=(200, 200, 200))
+        d.text((80, 330), SUBTITLE, font=font(28), fill=(200, 200, 200))
         d.text((80, 380), "Real timing: photos as taken, speech when it was spoken.",
                font=font(28), fill=(200, 200, 200))
+        if any(e["question"] for e in events):
+            d.text((80, 430), "Questions are re-voiced; the phone records no audio.",
+                   font=font(28), fill=(200, 200, 200))
     return img
 
 
 def main():
-    global SAY_STARTUP_S
+    global SAY_STARTUP_S, SUBTITLE
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     for a in sys.argv[1:]:
         if a.startswith("--voice-startup="):
             SAY_STARTUP_S = float(a.split("=", 1)[1])
+        if a.startswith("--subtitle="):
+            SUBTITLE = a.split("=", 1)[1]
     folder, out = args[:2]
     title = args[2] if len(args) > 2 else "sense: live session replay"
     events = load(folder)
@@ -183,6 +210,7 @@ def main():
     events = tts(events, tmp)
     if len(events) < n_answers:
         print(f"{n_answers - len(events)} answers dropped while the speaker was busy (as live)")
+    question_audio(events, tmp)
     skips = cut_idle(events)
     for start, cut in skips:
         print(f"cut {cut:.0f} s of idle time")
@@ -200,13 +228,17 @@ def main():
     ff.stdin.close()
     ff.wait()
 
-    inputs, filters = [], []
-    for i, e in enumerate(events):
-        inputs += ["-i", e["audio"]]
-        ms = int((e["spoke"] - t0) * 1000)
+    inputs, filters, tracks = [], [], []
+    for e in events:
+        tracks.append((e["audio"], e["spoke"]))
+        if e.get("q_audio"):
+            tracks.append((e["q_audio"], e["captured"] + 0.3))
+    for i, (path, start) in enumerate(tracks):
+        inputs += ["-i", path]
+        ms = int((start - t0) * 1000)
         filters.append(f"[{i + 1}:a]adelay={ms}|{ms}[a{i}]")
-    mix = "".join(f"[a{i}]" for i in range(len(events)))
-    filters.append(f"{mix}amix=inputs={len(events)}:normalize=0[aout]")
+    mix = "".join(f"[a{i}]" for i in range(len(tracks)))
+    filters.append(f"{mix}amix=inputs={len(tracks)}:normalize=0[aout]")
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", video, *inputs,
                     "-filter_complex", ";".join(filters), "-map", "0:v", "-map", "[aout]",
                     "-c:v", "copy", "-c:a", "aac", "-shortest", out], check=True)

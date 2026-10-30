@@ -18,6 +18,8 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+    // The one-shot prompt is tools/prompts/moment_*.txt, the same file the offline evals score.
+    sourceSets["main"].assets.srcDir("../../tools/prompts")
 }
 
 dependencies {

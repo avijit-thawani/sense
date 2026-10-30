@@ -1,0 +1,150 @@
+{
+ "phrases": [
+  {
+   "t": 5.2,
+   "said": "Too dark to see.",
+   "verdict": "correct",
+   "note": "Image is dark and out of focus."
+  },
+  {
+   "t": 11.0,
+   "said": "Bed directly ahead, close. Mirror standing on the left. \"Citizen\" sign visible through the window.",
+   "verdict": "wrong",
+   "note": "Sign says \"citizenM\", not \"Citizen\"."
+  },
+  {
+   "t": 16.0,
+   "said": "Low shelf directly ahead. Large window ahead showing city buildings, bright daylight.",
+   "verdict": "wrong",
+   "note": "Calls the radiator/AC unit a low shelf."
+  },
+  {
+   "t": 25.1,
+   "said": "Book \"The Bell Jar\" by Plath, remote control, and a blue glasses case ahead.",
+   "verdict": "correct",
+   "note": "Accurately identifies the book, remote, and case despite blur."
+  },
+  {
+   "t": 31.9,
+   "said": "Black water bottle directly ahead, labeled Elise. Laptop and various bags on table.",
+   "verdict": "correct",
+   "note": "Correctly reads \"EliseAI\" as Elise and notes the laptop and bags."
+  },
+  {
+   "t": 40.6,
+   "said": "Bed directly ahead. Bottle of Airlife nutrition supplement in your hand.",
+   "verdict": "wrong",
+   "note": "Brand is \"fairlife\" (cut off on left), and it is sitting on the table, not in a hand."
+  },
+  {
+   "t": 46.8,
+   "said": "Bottle close in front. \"30g Protein\" nutrition drink.",
+   "verdict": "correct",
+   "note": "Correctly reads the bottle label."
+  },
+  {
+   "t": 53.7,
+   "said": "\"Well begun is half done,\" and \"Freedom\" printed on a book cover.",
+   "verdict": "hallucinated",
+   "note": "\"Freedom\" is correct, but the top text says \"EST 1776 BOSTON\", not \"Well begun is half done\"."
+  },
+  {
+   "t": 59.6,
+   "said": "Kindle e-reader, text too blurry; hold closer.",
+   "verdict": "correct",
+   "note": "Text on Kindle is out of focus."
+  },
+  {
+   "t": 62.7,
+   "said": "\"The Beauty of New York.\" Text describes walking the streets of New York City.",
+   "verdict": "correct",
+   "note": "Reads the title and summarizes the blurry text accurately."
+  },
+  {
+   "t": 69.0,
+   "said": "Text, too blurry; hold closer.",
+   "verdict": "correct",
+   "note": "Laptop screen text is blurry."
+  },
+  {
+   "t": 72.8,
+   "said": "Laptop screen directly ahead. \"Reference guide,\" text details on hardware components and specifications are displayed.",
+   "verdict": "hallucinated",
+   "note": "Text on laptop is completely illegible; \"Reference guide\" is hallucinated."
+  },
+  {
+   "t": 79.8,
+   "said": "Black water bottle close in front at chest height; open shelving unit behind.",
+   "verdict": "correct",
+   "note": "Accurately describes bottle and background shelves."
+  },
+  {
+   "t": 85.7,
+   "said": "Bed directly ahead, close. Floor lamp to the right at head height.",
+   "verdict": "correct",
+   "note": "Accurately identifies bed and lamp."
+  },
+  {
+   "t": 91.6,
+   "said": "Fairlife protein shake bottle, close in front. Bed directly ahead.",
+   "verdict": "correct",
+   "note": "Correctly identifies the bottle and bed."
+  },
+  {
+   "t": 102.2,
+   "said": "The Bell Jar by Sylvia Plath. It is ahead, close by.",
+   "verdict": "correct",
+   "note": "Directly answers the user's question about the book."
+  },
+  {
+   "t": 112.5,
+   "said": "Your bottle is on the table, to your left and within reach.",
+   "verdict": "correct",
+   "note": "Accurately locates the bottle for the user."
+  },
+  {
+   "t": 119.2,
+   "said": "Fairlife protein shake. It is on the left, within reach.",
+   "verdict": "correct",
+   "note": "Clarifies what kind of bottle it is."
+  },
+  {
+   "t": 128.6,
+   "said": "Google Maps is open. The map is centered ahead on your screen.",
+   "verdict": "correct",
+   "note": "Identifies the map application on the laptop."
+  },
+  {
+   "t": 134.2,
+   "said": "A digital map on a laptop screen; it is ahead.",
+   "verdict": "vague",
+   "note": "Fails to answer the user's question \"What location\" (map shows New York/New Jersey area)."
+  },
+  {
+   "t": 143.3,
+   "said": "A black water bottle. It is within reach, straight ahead.",
+   "verdict": "correct",
+   "note": "Identifies the black water bottle."
+  },
+  {
+   "t": 150.9,
+   "said": "Your gloves are there; they are just ahead, behind the black bottle.",
+   "verdict": "correct",
+   "note": "Accurately locates the white gloves behind the bottle."
+  },
+  {
+   "t": 157.8,
+   "said": "White. They are resting on the table directly ahead of you.",
+   "verdict": "correct",
+   "note": "Correctly identifies the color of the gloves."
+  }
+ ],
+ "missed": [],
+ "verbosity": 2,
+ "timeliness": 5,
+ "usefulness": 8,
+ "summary": "The device is fast, concise, and very helpful for locating personal items and reading most labels upon request. However, it occasionally hallucinates illegible text on book covers and screens rather than admitting it cannot read them.",
+ "model": "google/gemini-4-argon",
+ "cost_usd": 0.050348,
+ "seconds": 25.2
+}

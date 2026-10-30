@@ -1,4 +1,5 @@
-// Same USB protocol as firmware/snap, plus Wi-Fi: joins WIFI_SSID and serves
+// Same USB protocol as firmware/snap, plus Wi-Fi: joins the phone hotspot (WIFI_SSID2) if it is
+// there, else WIFI_SSID, and serves
 //   GET /capture            one current JPEG
 //   GET /size?f=<name>      qvga | vga | svga | xga | hd | sxga | uxga
 // Over USB: 'p' photo, 's'/'v'/'x' size, 'g' 1024x768, 'u' 1600x1200, 'i' prints "IP <addr>",
@@ -12,7 +13,19 @@
 
 const long BAUD = 460800;
 WebServer server(80);
-WiFiMulti wifi;  // joins whichever known network is strongest
+WiFiMulti wifi;  // fallback: joins whichever known network is strongest
+
+// The phone's hotspot (WIFI_SSID2) is preferred: photos reach the phone in ~0.3 s there, while
+// through the home router they stall for seconds (docs/benchmarks.md).
+bool joinHotspot(unsigned long ms) {
+  WiFi.begin(WIFI_SSID2, WIFI_PASS2);
+  for (unsigned long t = millis(); millis() - t < ms;) {
+    if (WiFi.status() == WL_CONNECTED) return true;
+    delay(100);
+  }
+  WiFi.disconnect();
+  return false;
+}
 
 void setSize(framesize_t f) { esp_camera_sensor_get()->set_framesize(esp_camera_sensor_get(), f); }
 
@@ -64,7 +77,8 @@ void setup() {
   WiFi.setSleep(false);  // power save adds 100+ ms latency per request
   wifi.addAP(WIFI_SSID, WIFI_PASS);
   wifi.addAP(WIFI_SSID2, WIFI_PASS2);
-  for (int i = 0; i < 20 && wifi.run(500) != WL_CONNECTED; i++) {}
+  if (!joinHotspot(8000))
+    for (int i = 0; i < 20 && wifi.run(500) != WL_CONNECTED; i++) {}
   server.on("/capture", handleCapture);
   server.on("/size", handleSize);
   server.begin();
@@ -75,7 +89,7 @@ void loop() {
   static unsigned long lastCheck = 0;
   if (millis() - lastCheck > 3000) {  // rejoin, or switch networks, if the link dropped
     lastCheck = millis();
-    if (WiFi.status() != WL_CONNECTED) wifi.run(500);
+    if (WiFi.status() != WL_CONNECTED && !joinHotspot(4000)) wifi.run(500);
   }
   server.handleClient();
   if (!Serial.available()) return;
