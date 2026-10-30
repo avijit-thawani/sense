@@ -53,11 +53,12 @@ languages keeps the original and an English line.
 
 **Hill-climbing.** One prompt, judged against the human gold by an LLM, train/dev/test held apart:
 6.2 to 7.8/10 on dev (`moment_v4`, shipped), with failures mined from our own sessions back into
-the set. Then 8 models with and without thinking on the dev moments; the app offers the ones on a
-frontier: Gemma 4 (fastest, 0.6 s), Gemini 3.1 and 3.5 Flash Lite, Qwen 3.8 Flash (cheapest), and
-Gemini 4 Argon (most accurate, ~8× the cost). [docs/evals.md](docs/evals.md)
+the set. Then 18 vision models (picked by price and Artificial Analysis latency) on the dev
+moments; the app offers the ones on a frontier: Gemma 4 31B (fastest, 0.6 s), Gemini 3.1 and 3.5
+Flash Lite, Gemma 4 26B A4B (cheapest, ₹0.006 a photo) and Gemini 4 Argon (most accurate, ~8× the
+cost). [docs/evals.md](docs/evals.md)
 
-<p align="center"><img src="docs/media/model-pareto.png" width="840" alt="Score versus latency and score versus cost for 13 model configurations, with Pareto frontiers"></p>
+<p align="center"><img src="docs/media/model-pareto.png" width="840" alt="Score versus latency and score versus cost for 23 model configurations, with Pareto frontiers"></p>
 
 **Every session is recorded** and can be replayed with a new prompt or model, or turned into a
 video, without walking again. [Hold-to-ask video with sound](docs/media/phone-ask.mp4) (1:06, 8

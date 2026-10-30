@@ -30,8 +30,8 @@ object Models {
             mapOf("low" to (1.30 to 0.00061))),
         Model("google/gemma-4-31b-it", "Gemma 4 31B", 0.20, 0.40, true,
             mapOf("none" to (0.64 to 0.00042), "low" to (4.20 to 0.00110))),
-        Model("qwen/qwen3.8-flash", "Qwen 3.8 Flash", 0.15, 0.47, true,
-            mapOf("none" to (2.65 to 0.00013), "low" to (6.17 to 0.00037))),
+        Model("google/gemma-4-26b-a4b-it", "Gemma 4 26B A4B", 0.09, 0.30, true,
+            mapOf("none" to (1.33 to 0.00007))),
         Model("google/gemini-4-argon", "Gemini 4 Argon", 2.0, 10.0, true,
             mapOf("low" to (4.57 to 0.00379))),
     )

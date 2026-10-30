@@ -577,10 +577,14 @@ class MainActivity : Activity() {
         if (!listening) return
         listening = false
         releaseAt = System.currentTimeMillis()
-        stopCapture()                          // closes our pipe: end of audio for the recognizer
         tone.startTone(ToneGenerator.TONE_PROP_PROMPT, 80)
         ui.post { describeButton.text = "Thinking…" }
-        recognizer?.stopListening()            // the final result arrives in onResults
+        if (capturing) {
+            // Piped audio: end the stream and let the recognizer finish what it has buffered.
+            // stopListening() here would finalize early and drop the last words.
+            stopCapture()
+            ui.postDelayed({ if (sttAt == 0L) recognizer?.stopListening() }, 2500)
+        } else recognizer?.stopListening()     // the final result arrives in onResults
     }
 
     private fun newRecognizer(): SpeechRecognizer =

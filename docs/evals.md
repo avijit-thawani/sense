@@ -87,9 +87,31 @@ so differences under ~0.5 are noise). Latency is request to answer; cost is meas
 | GPT-5 nano, low | 4.57 | 5 | 7 | 8.00 | 12.69 | 0.25 |
 
 Gemini 3.5 Flash Lite, GPT-5 nano and Argon can't run with thinking "none" (OpenRouter returns 400);
-the app falls back to "low". The app offers the Pareto models (best score for their latency or
-cost): Gemma 4 (fastest), 3.1 and 3.5 Flash Lite, Qwen 3.8 Flash (cheapest; slow 1 time in 10)
-and Argon (best, ~8x the cost and 3x slower). The prompt was tuned on Gemini, which favours it.
+the app falls back to "low". The prompt was tuned on Gemini, which favours it.
+
+Round 4b, fast vision models picked from Artificial Analysis latency (Oct 30), no thinking, run
+five at a time (latency slightly pessimistic):
+
+| Model | Score | Critical | Words | Median s | p90 s | $ / 1000 |
+|---|---|---|---|---|---|---|
+| Gemma 4 26B A4B | **7.57** | 1 | 2 | 1.33 | 1.95 | **0.07** |
+| Llama 4 Scout | 7.10 | 2 | 3 | 4.72 | 6.09 | 0.34 |
+| Gemini 2.5 Flash Lite | 6.90 | 0 | 4 | 1.18 | 1.41 | 0.10 |
+| Qwen3-VL 30B A3B | 6.76 | 2 | 9 | 2.17 | 4.57 | 0.22 |
+| Nemotron 3.5 Super VL | 6.33 | 4 | 5 | 0.80 | 1.20 | 0.14 |
+| Qwen 3.8 Omni Flash | 6.33 | 3 | 8 | 3.44 | 4.61 | 0.21 |
+| Llama 4 Maverick | 6.05 | 6 | 4 | 1.08 | 1.75 | 0.68 |
+| Ministral 14B | 3.76 | 13 | 13 | 1.62 | 2.22 | 0.32 |
+| Ministral 8B | 3.43 | 11 | 9 | 1.28 | 1.94 | 0.24 |
+| Mistral Small 4 | 1.90 | 5 | 4 | 1.45 | 2.03 | 0.25 |
+
+Gemma 4 26B's lead is mostly currency (10 of the 21 dev moments) and one correct silence; it
+missed a head-height pole that 3.5 Flash Lite caught. Gemma 4 31B on the phone uses ~480 input
+tokens per photo against Gemini's ~1,600 (OpenRouter's Gemma endpoint shrinks the image): fast,
+but "can't tell" on screens. A bigger, less currency-heavy dev set would separate these better.
+
+The app offers the Pareto models (best score for their latency or cost): Gemma 4 31B (fastest),
+3.1 and 3.5 Flash Lite, Gemma 4 26B A4B (cheapest, ~₹0.006 a photo) and Argon (best, ~8x the cost).
 
 ![Score vs latency and cost](media/model-pareto.png)
 
