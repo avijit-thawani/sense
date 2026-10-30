@@ -40,11 +40,13 @@ SHIPPED = ("Gemini 3.1 Flash Lite", "none")
 COLORS = {"google": "#E8710A", "openai": "#1A73E8", "anthropic": "#9334E6", "qwen": "#188038"}
 # where to put each frontier label, in data coordinates (x, y, alignment), per chart
 LABELS = {
-    "lat": {("Gemini 4 Argon", "low"): (3.2, 8.02, "left"), ("Gemini 3.5 Flash Lite", "low"): (0.15, 7.78, "left"),
-            SHIPPED: (0.15, 5.95, "left"), ("Gemma 4 31B", "none"): (0.15, 5.55, "left")},
-    "usd": {("Gemini 4 Argon", "low"): (3.3, 8.02, "right"), ("Gemini 3.5 Flash Lite", "low"): (0.55, 7.75, "right"),
-            SHIPPED: (0.8, 6.15, "left"), ("Qwen 3.8 Flash", "none"): (0.105, 7.45, "left")},
+    "lat": {("Gemini 4 Argon", "low"): (4.75, 8.05, "right"), ("Gemini 3.5 Flash Lite", "low"): (0.1, 7.8, "left"),
+            SHIPPED: (0.1, 6.0, "left"), ("Gemma 4 31B", "none"): (0.1, 5.75, "left")},
+    "usd": {("Gemini 4 Argon", "low"): (3.3, 8.05, "right"), ("Gemini 3.5 Flash Lite", "low"): (0.55, 7.8, "right"),
+            SHIPPED: (0.8, 6.15, "left"), ("Qwen 3.8 Flash", "none"): (0.105, 7.5, "left")},
 }
+# visible window: weaker or slower configs are listed under the chart instead
+Y_MIN, LAT_MAX = 5.5, 5.0
 
 
 def load():
@@ -74,12 +76,12 @@ def main():
     for ax, key, title, xlabel in [(axes[0], "lat", "Score vs latency", "median seconds, request to answer"),
                                    (axes[1], "usd", "Score vs cost", "$ per 1000 moments (log)")]:
         front = frontier(rows, key)
-        xs = [d[key] for d in front] + [max(d[key] for d in rows) * 1.1]
+        xs = [d[key] for d in front] + [LAT_MAX if key == "lat" else 5.5]
         ys = [d["score"] for d in front] + [front[-1]["score"]]
         ax.step(xs, ys, where="post", color="#888", ls="--", lw=1.2, zorder=1)
         for d in rows:
             c = COLORS[d["provider"]]
-            ax.scatter(d[key], d["score"], s=90 if d in front else 45, zorder=3, linewidth=2,
+            ax.scatter(d[key], d["score"], s=90 if d in front else 45, zorder=3, linewidth=2, clip_on=True,
                        facecolor=c if d["thinking"] == "none" else "white", edgecolor=c)
             place = LABELS[key].get((d["name"], d["thinking"]))
             if place:
@@ -96,8 +98,14 @@ def main():
             ax.set_xticks([0.1, 0.2, 0.5, 1, 2, 4])
             ax.set_xticklabels(["$0.1", "$0.2", "$0.5", "$1", "$2", "$4"])
         else:
-            ax.set_xlim(0, 8.6)
-        ax.set_ylim(4.3, 8.2)
+            ax.set_xlim(0, LAT_MAX)
+        ax.set_ylim(Y_MIN, 8.2)
+        hidden = [d for d in rows if d["score"] < Y_MIN or (key == "lat" and d[key] > LAT_MAX)]
+        if hidden:
+            ax.text(0.99, 0.02, "not shown: " + "; ".join(
+                f'{d["name"]}{", low" if d["thinking"] == "low" else ""} ({d["score"]:.1f}, '
+                + (f'{d["lat"]:.1f} s' if key == "lat" else f'${d["usd"]:.2f}') + ")" for d in hidden),
+                transform=ax.transAxes, ha="right", va="bottom", fontsize=9, color="#777")
         ax.set_title(title, loc="left", fontsize=13, fontweight="bold")
         ax.set_xlabel(xlabel)
         ax.set_ylabel("score (0–10)")

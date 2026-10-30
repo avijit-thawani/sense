@@ -429,37 +429,54 @@ class MainActivity : Activity() {
             else android.R.style.Theme_DeviceDefault_Light_Dialog_Alert
         val dialog = android.app.AlertDialog.Builder(this, theme).create()
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(px(12), px(8), px(12), px(8)) }
-        col.addView(LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.BOTTOM
-            setPadding(px(12), px(12), px(12), px(10))
-            addView(Ui.text(this@MainActivity, "Model", 20f, bold = true), LinearLayout.LayoutParams(0, -2, 1f))
-            addView(Ui.text(this@MainActivity, "wait", 13f, p.muted).apply { gravity = Gravity.END }, LinearLayout.LayoutParams(px(56), -2))
-            addView(Ui.text(this@MainActivity, "per 1000", 13f, p.muted).apply { gravity = Gravity.END }, LinearLayout.LayoutParams(px(76), -2))
-        })
-        for (m in Models.all(this)) {
-            val on = m.id == model
-            col.addView(LinearLayout(this).apply {
+        // Tap "wait" or "per 1000" to sort by it (kept in preferences); the active column is marked.
+        fun fill() {
+            col.removeAllViews()
+            val sort = prefs.getString("model_sort", "wait")!!
+            fun head(label: String, key: String, w: Int) = Ui.text(this@MainActivity,
+                label + if (sort == key) " ↑" else "", 13f, if (sort == key) p.text else p.muted, sort == key).apply {
+                gravity = Gravity.END
+                setPadding(0, px(8), 0, px(8))
+                contentDescription = "Sort by $label" + if (sort == key) ", sorted" else ""
+                setOnClickListener { prefs.edit().putString("model_sort", key).apply(); fill() }
+            }.also { it.layoutParams = LinearLayout.LayoutParams(px(w), -2) }
+            col.addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(px(12), px(14), px(12), px(14))
-                if (on) background = Ui.rounded(if (p.dark) Color.rgb(44, 44, 50) else Color.rgb(255, 244, 204), px(12).toFloat())
-                addView(Ui.icon(this@MainActivity, m.logo, logoTint(m)), LinearLayout.LayoutParams(px(22), px(22)).apply { marginEnd = px(14) })
-                addView(Ui.text(this@MainActivity, m.name, 16f, p.text, on), LinearLayout.LayoutParams(0, -2, 1f))
-                addView(Ui.text(this@MainActivity, Models.latency(m, effort(m.id))?.let { "%.1f s".format(it) } ?: "", 15f, p.muted).apply {
-                    fontFeatureSettings = "tnum"; gravity = Gravity.END
-                }, LinearLayout.LayoutParams(px(56), -2))
-                addView(Ui.text(this@MainActivity, moneyColumn(Models.estimateUsd(m, effort(m.id)) * 1000), 15f, p.muted).apply {
-                    fontFeatureSettings = "tnum"; gravity = Gravity.END
-                }, LinearLayout.LayoutParams(px(76), -2))
-                contentDescription = "${m.name}, about ${moneyColumn(Models.estimateUsd(m, effort(m.id)) * 1000)} per 1000 moments" + if (on) ", selected" else ""
-                setOnClickListener {
-                    model = m.id
-                    prefs.edit().putString("model", model).apply()
-                    dialog.dismiss(); buildUi()
-                }
+                gravity = Gravity.BOTTOM
+                setPadding(px(12), px(12), px(12), px(4))
+                addView(Ui.text(this@MainActivity, "Model", 20f, bold = true), LinearLayout.LayoutParams(0, -2, 1f))
+                addView(head("wait", "wait", 64))
+                addView(head("per 1000", "cost", 84))
             })
+            val models = Models.all(this@MainActivity).sortedBy { m ->
+                if (sort == "cost") Models.estimateUsd(m, effort(m.id))
+                else Models.latency(m, effort(m.id)) ?: Double.MAX_VALUE
+            }
+            for (m in models) {
+                val on = m.id == model
+                col.addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(px(12), px(14), px(12), px(14))
+                    if (on) background = Ui.rounded(if (p.dark) Color.rgb(44, 44, 50) else Color.rgb(255, 244, 204), px(12).toFloat())
+                    addView(Ui.icon(this@MainActivity, m.logo, logoTint(m)), LinearLayout.LayoutParams(px(22), px(22)).apply { marginEnd = px(14) })
+                    addView(Ui.text(this@MainActivity, m.name, 16f, p.text, on), LinearLayout.LayoutParams(0, -2, 1f))
+                    addView(Ui.text(this@MainActivity, Models.latency(m, effort(m.id))?.let { "%.1f s".format(it) } ?: "", 15f, p.muted).apply {
+                        fontFeatureSettings = "tnum"; gravity = Gravity.END
+                    }, LinearLayout.LayoutParams(px(64), -2))
+                    addView(Ui.text(this@MainActivity, moneyColumn(Models.estimateUsd(m, effort(m.id)) * 1000), 15f, p.muted).apply {
+                        fontFeatureSettings = "tnum"; gravity = Gravity.END
+                    }, LinearLayout.LayoutParams(px(84), -2))
+                    contentDescription = "${m.name}, about ${moneyColumn(Models.estimateUsd(m, effort(m.id)) * 1000)} per 1000 moments" + if (on) ", selected" else ""
+                    setOnClickListener {
+                        model = m.id
+                        prefs.edit().putString("model", model).apply()
+                        dialog.dismiss(); buildUi()
+                    }
+                })
+            }
         }
+        fill()
         dialog.setView(ScrollView(this).apply { addView(col) })
         dialog.window?.setBackgroundDrawable(Ui.rounded(p.card, px(20).toFloat()))
         dialog.show()
