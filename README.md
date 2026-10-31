@@ -35,6 +35,15 @@ with measured cost and wait per model; light and dark themes.
   <img src="docs/media/app-screens.webp" width="840" alt="App screens: Home, History, a moment, model picker">
 </p>
 
+**Camera glasses** (Bapick M08T, ~$60, HeyCyan family). Our own Bluetooth code (no vendor app)
+takes photos, reads the buttons and mic, and speaks through the glasses' open-ear speakers. Sharper,
+cleaner pictures than the ESP32, but slow: a photo takes 2.3–4.4 s over Bluetooth and the mic
+blocks the camera, so describe took 5.5–8.4 s and ask 9.1 s (ESP32: ~1.5 s). [docs/glasses.md](docs/glasses.md)
+
+| Glasses, Bluetooth | 320×180 | 384×216 | 512×288 | 640×360 |
+|---|---|---|---|---|
+| Photo, camera idle | 2.3 s | 2.7 s | 3.2 s | 4.4 s |
+
 **Data.** Samples of 7 public datasets (EgoBlind, VizWiz, GuideDog India, Indian currency, Indic
 signboards...), fetched file by file. From them, our own "moments": a frame where the user asked
 nothing, and the one line the device should say, checked or rewritten by a person. Text in Indian
@@ -69,7 +78,8 @@ questions); [the first walk](docs/media/phone-walk.mp4) (live mode).
 - [x] Board over USB and Wi-Fi; laptop loop; Android app with Describe, hold to ask, History, Settings.
 - [x] Evals: public samples, our moments set, prompt hill-climbing, model benchmark.
 - [ ] Reproduce in India: same kit and steps with a collaborator ([GETTING_STARTED.md](GETTING_STARTED.md)).
-- [ ] HeyCyan glasses: the answer through open-ear speakers, no earphones.
+- [x] HeyCyan-family glasses from a Mac: photos, buttons, mic and speakers with our own code; timed.
+- [ ] Glasses: faster photos (phone mic during ask, the glasses' Wi-Fi), then into the Android app.
 - [ ] Test with blind and low-vision interns.
 
 What we learned (prompts, hallucinations, speed, light, Wi-Fi): [docs/findings.md](docs/findings.md).
@@ -88,13 +98,14 @@ Timings: [docs/benchmarks.md](docs/benchmarks.md).
 | `tools/describe.py` | the live loop on a laptop |
 | `tools/replay.py`, `session_video.py`, `moment_timeline.py`, `judge_video.py` | offline: replay, videos, review |
 | `tools/snap.py`, `shoot.py` | one photo; a photo per keypress |
+| `tools/glasses.py`, `glasses_describe.py`, `glasses_ask.py` | camera glasses over Bluetooth: [docs/glasses.md](docs/glasses.md) |
 | `tools/orclient.py` | every paid call: spend cap, ledger, attribution |
 | `tools/enhance.py`, `speak_server.py` | brightening; fast voice on a Mac |
 | `tools/bench_*.py`, `phone_bench.sh` | timing measurements |
 | `tools/prompts/` | prompts, shared by the evals and the phone app (bundled at build time) |
 | `tools/eval_sets.py`, `moments.py`, `climb.py`, `mine_sessions.py`, ... | evals: [docs/evals.md](docs/evals.md) |
 | `phone/` | Android app ([phone/README.md](phone/README.md)) |
-| `docs/` | hardware and buying, workflow, evals, findings, benchmarks, media |
+| `docs/` | hardware and buying, workflow, evals, findings, benchmarks, glasses, media |
 | `sessions/`, `videos/`, `photos/`, `backups/`, `data/` | local recordings and eval data (not in git) |
 
 Config: copy `.env.example` to `.env` and add an OpenRouter key. `.env`, `secrets.h` and

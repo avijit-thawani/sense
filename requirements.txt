@@ -2,4 +2,6 @@ esptool
 pyserial
 pillow
 requests
+bleak
+opuslib
 pyobjc-framework-Cocoa; sys_platform == "darwin"
