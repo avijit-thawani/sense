@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- CH340 USB-serial chip on the ESP32-CAM-MB adapter (vendor 0x1A86, product 0x7523). -->
+<!-- CH340 USB-serial chip on the ESP32-CAM-MB adapter (vendor 0x1A86, product 0x7523), and the
+     XIAO ESP32S3's native USB (Espressif, vendor 0x303A, product 0x1001). -->
 <resources>
     <usb-device vendor-id="6790" product-id="29987" />
+    <usb-device vendor-id="12346" product-id="4097" />
 </resources>

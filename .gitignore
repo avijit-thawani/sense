@@ -6,6 +6,8 @@ backups/
 firmware/**/secrets.h
 ledger.jsonl
 phone/.gradle/
+phone/.kotlin/
+.scratch/
 phone/app/build/
 phone/build/
 phone/local.properties

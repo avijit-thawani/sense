@@ -44,6 +44,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import com.hoho.android.usbserial.driver.CdcAcmSerialDriver
 import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
 import org.json.JSONObject
@@ -69,6 +70,7 @@ class MainActivity : Activity() {
     private lateinit var photoView: ImageView
     private lateinit var describeButton: Button
     private lateinit var answerView: TextView
+    private lateinit var questionView: TextView
     private lateinit var tts: TextToSpeech
     private val tone by lazy { ToneGenerator(AudioManager.STREAM_MUSIC, 50) }
     @Volatile private var looking = false
@@ -101,8 +103,47 @@ class MainActivity : Activity() {
     private var captureStartAt = 0L
     private val AUDIO_RATE = 16000
 
+    /** "camera": the XIAO's mic over Bluetooth (falls back to the phone's when that isn't possible). */
+    private fun micMode() = prefs.getString("mic", "camera")!!
+    private var micUsed = "phone"
+    private var micOut: java.io.OutputStream? = null
+
+    /** Ends one question's stream (not a newer one's, if the user has already asked again). */
+    private fun closeMicOut(which: java.io.OutputStream?) = synchronized(this) {
+        if (which != null && micOut === which) { runCatching { which.close() }; micOut = null }
+    }
+
+    /** Points the recognizer at the board's mic, streamed over Bluetooth. Null if not possible. */
+    private fun startCameraMic(intent: Intent): ParcelFileDescriptor? {
+        val b = board as? BleBoard ?: return null
+        if (micMode() != "camera" || !b.hasMic || Build.VERSION.SDK_INT < 33) return null
+        val (readEnd, writeEnd) = ParcelFileDescriptor.createPipe()
+        intent.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, readEnd)
+            .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
+            .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
+            .putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, AUDIO_RATE)
+        pcm = ByteArrayOutputStream()
+        val out = ParcelFileDescriptor.AutoCloseOutputStream(writeEnd)
+        synchronized(this) { micOut = out }
+        capturing = true
+        micUsed = "camera"
+        captureStartAt = System.currentTimeMillis()
+        mark("audio_capture_start")
+        b.startAudio(object : BleBoard.AudioSink {
+            override fun onPcm(pcm: ByteArray) {
+                mark("audio_first_packet", overwrite = false)
+                synchronized(this@MainActivity.pcm) { this@MainActivity.pcm.write(pcm) }
+                synchronized(this@MainActivity) { runCatching { micOut?.write(pcm) } }
+            }
+            override fun onEnd() { mark("audio_end"); closeMicOut(out) }  // end of stream: the recognizer finalizes
+        })
+        return readEnd
+    }
+
     /** Starts recording and points the recognizer at our pipe. False = use the recognizer's own mic. */
     private fun startCapture(intent: Intent): ParcelFileDescriptor? {
+        micUsed = "phone"
+        startCameraMic(intent)?.let { return it }
         if (!recordQuestionAudio || Build.VERSION.SDK_INT < 33) return null
         return try {
             val min = AudioRecord.getMinBufferSize(AUDIO_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
@@ -140,7 +181,15 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun stopCapture() { capturing = false }
+    private fun stopCapture() {
+        capturing = false
+        if (micUsed == "camera") {
+            (board as? BleBoard)?.stopAudio()
+            // The board answers with an end marker within ~50 ms; don't hang if it never comes.
+            val out = micOut
+            ui.postDelayed({ closeMicOut(out) }, 800)
+        }
+    }
 
     /** Writes the captured question as a 16 kHz mono WAV next to the photo. */
     private fun saveQuestionAudio(photo: String): String? {
@@ -171,6 +220,7 @@ class MainActivity : Activity() {
     private var port: UsbSerialPort? = null
     @Volatile private var live = false
     @Volatile private var once = false
+    @Volatile private var onceWaitUntil = 0L
     @Volatile private var inFlight = false
     @Volatile private var speaking = false
     @Volatile private var speechEnds = 0L
@@ -198,10 +248,13 @@ class MainActivity : Activity() {
             if (ok == TextToSpeech.SUCCESS) {
                 tts.setSpeechRate(1.5f)
                 tts.setOnUtteranceProgressListener(speechEvents)
-                say("ready", "warmup")
+                tts.speak("ready", TextToSpeech.QUEUE_ADD,
+                    Bundle().apply { putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 0f) }, "warmup")
             }
         }
         registerReceiver(usbPermission, IntentFilter(ACTION_USB),
+            if (Build.VERSION.SDK_INT >= 33) Context.RECEIVER_NOT_EXPORTED else 0)
+        registerReceiver(usbDetached, IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED),
             if (Build.VERSION.SDK_INT >= 33) Context.RECEIVER_NOT_EXPORTED else 0)
         connect()
         Thread(::loop, "camera").start()
@@ -209,14 +262,94 @@ class MainActivity : Activity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        benchCount = intent.getIntExtra("bench", 0)
+        // Glasses test switches: --ei glasses_size 0..6, --ez glasses_high_priority true|false, --es link glasses|usb|…
+        if (intent.hasExtra("glasses_size")) prefs.edit().putInt("glasses_size", intent.getIntExtra("glasses_size", 1)).apply()
+        if (intent.hasExtra("glasses_high_priority")) {
+            prefs.edit().putBoolean("glasses_high_priority", intent.getBooleanExtra("glasses_high_priority", true)).apply()
+            if (board is GlassesCamera) dropBoard()  // the priority is set while connecting
+        }
+        intent.getStringExtra("link")?.let { if (it != linkMode()) { prefs.edit().putString("link", it).apply(); dropBoard() } }
+        (board as? GlassesCamera)?.size = prefs.getInt("glasses_size", 1)
+        intent.getStringExtra("mic")?.let { prefs.edit().putString("mic", it).apply() }
+        val dry = intent.getIntExtra("ask_dry", 0)
+        if (dry > 0 && board == null) event("dry_ask", "skipped: camera not connected")
+        else if (dry > 0) { dryAsk = true; startAsk(); ui.postDelayed({ endAsk() }, dry * 1000L) }
         if (board == null) connect()
+    }
+
+    /** A hold-to-ask without the model call, to test mics and speech-to-text for free:
+     *  adb shell am start -n com.sense.app/.MainActivity --ei ask_dry 4 [--es mic camera|phone]
+     *  holds for 4 s; the transcript and timings go to the event log as "dry_ask". */
+    @Volatile private var dryAsk = false
+
+    /** Photo timing over the current link, no model calls:
+     *  adb shell am start -n com.sense.app/.MainActivity --ei bench 5
+     *  Logs "bench <link> <size> <ms> <bytes>" and saves the photos to files/bench/. */
+    @Volatile private var benchCount = 0
+
+    private fun bench(b: Camera, n: Int) {
+        val dir = File(getExternalFilesDir("bench"), b.link).apply { mkdirs() }
+        val results = mutableListOf<String>()
+        if (b is GlassesCamera) {
+            // The glasses' own sizes; each photo's breakdown (ready, per chunk, asked again) is logged.
+            val keep = b.size
+            for (s in intArrayOf(0, 1)) {
+                b.size = s
+                val ms = ArrayList<Long>()
+                var failed = 0
+                repeat(n) {
+                    val t = System.currentTimeMillis()
+                    try {
+                        val jpeg = b.grab()
+                        val dt = System.currentTimeMillis() - t
+                        android.util.Log.i("sense", "bench glasses ${b.sizeLabel} $dt ${jpeg.size} | ${b.lastStats}")
+                        File(dir, "${b.sizeLabel}.jpg").writeBytes(jpeg)
+                        ms += dt
+                    } catch (e: Exception) {
+                        failed++
+                        android.util.Log.i("sense", "bench glasses ${b.sizeLabel} failed after ${System.currentTimeMillis() - t} ms: ${e.message}")
+                        if (!b.connected) throw e
+                    }
+                    Thread.sleep(800)
+                }
+                ms.sort()
+                results += "${b.sizeLabel} " + (if (ms.isEmpty()) "all failed" else "${ms[ms.size / 2]} ms") +
+                    (if (failed > 0) " ($failed of $n failed)" else "")
+                setStatus("Photo test over glasses: " + results.joinToString(", "))
+            }
+            b.size = keep
+            say("Photo test done", "status")
+            return
+        }
+        for (s in "svgu") {
+            ensureSize(b, s)
+            runCatching { b.grab() }
+            val ms = (1..n).map {
+                val t = System.currentTimeMillis()
+                val jpeg = b.grab()
+                val dt = System.currentTimeMillis() - t
+                android.util.Log.i("sense", "bench ${b.link} $s $dt ${jpeg.size}")
+                File(dir, "$s.jpg").writeBytes(jpeg)
+                dt
+            }.sorted()
+            results += "${sizeOf(s)} ${ms[ms.size / 2]} ms"
+            setStatus("Photo test over ${b.link}: " + results.joinToString(", "))
+        }
+        say("Photo test done", "status")
+        val summary = "${cameraLine()}: " + results.joinToString(", ")
+        ui.post { android.widget.Toast.makeText(this, summary, android.widget.Toast.LENGTH_LONG).show() }
+        ensureSize(b, size)
     }
 
     override fun onDestroy() {
         live = false
         unregisterReceiver(usbPermission)
+        unregisterReceiver(usbDetached)
         recognizer?.destroy()
         tts.shutdown()
+        dropBoard()
+        serial?.close()
         runCatching { port?.close() }
         super.onDestroy()
     }
@@ -228,6 +361,7 @@ class MainActivity : Activity() {
     private var statusText = "Starting…"
     private var logText = ""
     private var answerText: CharSequence = "Tap to describe. Hold to ask a question. Volume down works too."
+    private var questionText: CharSequence = ""
     private var lastPhoto: android.graphics.Bitmap? = null
     private val prefs by lazy { getSharedPreferences("sense", MODE_PRIVATE) }
     private fun devDetails() = prefs.getBoolean("dev_details", false)
@@ -282,24 +416,37 @@ class MainActivity : Activity() {
             }
             setOnClickListener { requestDescribe() }
         }
-        answerView = Ui.text(this, answerText, 24f).apply { setPadding(0, px(16), 0, px(8)) }
+        // Last moment, chat-like: photo on the left (it arrives first), question bubble and answer on the right.
+        questionView = Ui.text(this, questionText, 17f).apply {
+            background = Ui.rounded(p.card, px(14).toFloat())
+            setPadding(px(12), px(8), px(12), px(8))
+            visibility = if (questionText.isEmpty()) View.GONE else View.VISIBLE
+        }
+        answerView = Ui.text(this, answerText, 22f).apply { setPadding(px(2), px(8), 0, 0) }
         photoView = ImageView(this).apply {
             adjustViewBounds = true
-            maxHeight = px(140)
+            maxHeight = px(200)
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            lastPhoto?.let { setImageBitmap(it) }
+            visibility = View.GONE
+            lastPhoto?.let { setImageBitmap(it); visibility = View.VISIBLE }
         }
         log = Ui.text(this, logText, 11f, p.muted)
         root.addView(status)
         root.addView(describeButton, LinearLayout.LayoutParams(-1, 0, 1.6f).apply { topMargin = px(12) })
-        root.addView(answerView)
+        // Fixed height, so the button keeps its size whether this shows the hint or a photo and answer.
         root.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.TOP
-            addView(photoView, LinearLayout.LayoutParams(0, -2, 1f))
-            if (devDetails()) addView(ScrollView(this@MainActivity).apply { addView(log) },
-                LinearLayout.LayoutParams(0, px(140), 1f).apply { marginStart = px(10) })
-        })
+            setPadding(0, px(14), 0, 0)
+            addView(photoView, LinearLayout.LayoutParams(0, -2, 0.9f).apply { marginEnd = px(12) })
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(questionView, LinearLayout.LayoutParams(-2, -2))
+                addView(answerView)
+            }, LinearLayout.LayoutParams(0, -2, 1.1f))
+        }, LinearLayout.LayoutParams(-1, px(220)))
+        if (devDetails()) root.addView(ScrollView(this).apply { addView(log) },
+            LinearLayout.LayoutParams(-1, px(110)).apply { topMargin = px(8) })
         home = root
         history = HistoryPage(this, { tts.speak(it, TextToSpeech.QUEUE_FLUSH, null, "replay") },
             { if (::tts.isInitialized) tts.stop() }, ::devDetails)
@@ -374,7 +521,39 @@ class MainActivity : Activity() {
         group("Camera",
             Ui.row(this, if (board != null) "Connected" else "Not connected", cameraLine() +
                     (if (board == null) "\n$statusText" else ""),
-                Ui.quietButton(this, "Reconnect") { board = null; connect(); say("Reconnecting", "status") }),
+                Ui.quietButton(this, "Reconnect") { dropBoard(); connect(); say("Reconnecting", "status") }),
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, px(12), 0, px(14))
+                addView(Ui.text(this@MainActivity, "Photos over", 16f, bold = true))
+                addView(Ui.text(this@MainActivity, "Cable: either board, no hotspot needed. " +
+                    "Hotspot: the cable or a power bank only powers the board. " +
+                    "Bluetooth: XIAO only, no cable at all. " +
+                    "Glasses: the camera glasses' own camera over Bluetooth, slower", 13f, p.muted)
+                    .apply { setPadding(0, 0, 0, px(10)) })
+                addView(Ui.segmented(this@MainActivity,
+                    listOf("usb" to "USB cable", "wifi" to "Hotspot", "ble" to "Bluetooth", "glasses" to "Glasses"), linkMode()) {
+                    if (it == linkMode()) return@segmented
+                    prefs.edit().putString("link", it).apply()
+                    dropBoard(); connect(); buildUi()
+                })
+            },
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, px(12), 0, px(14))
+                addView(Ui.text(this@MainActivity, "Microphone for questions", 16f, bold = true))
+                addView(Ui.text(this@MainActivity, "Camera: the XIAO's mic, by your mouth, any headphones " +
+                    "(needs Bluetooth). Phone: the phone's own mic", 13f, p.muted)
+                    .apply { setPadding(0, 0, 0, px(10)) })
+                addView(Ui.segmented(this@MainActivity, listOf("camera" to "Camera", "phone" to "Phone"), micMode()) {
+                    prefs.edit().putString("mic", it).apply(); buildUi()
+                })
+            },
+            Ui.row(this, "Test photos", "Times 5 photos at each size over this link; no AI calls",
+                Ui.quietButton(this, "Test") {
+                    if (board == null) say("Camera not connected.", "status")
+                    else { benchCount = 5; say("Testing photos", "status") }
+                }),
             Ui.row(this, "Live mode", "Keep describing every few seconds, the older mode",
                 Ui.toggle(this, live) { if (it != live) toggleLive() }))
         val m = Models.find(this, model)
@@ -541,6 +720,7 @@ class MainActivity : Activity() {
 
     private fun startAsk() {
         if (looking) return
+        event("press", "ask" + if (board == null) " (camera not connected)" else "")
         if (board == null) { say("Camera not connected.", "status"); connect(); return }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1)
@@ -555,7 +735,7 @@ class MainActivity : Activity() {
         askShot = null; askCameraFailed = false; question = null; partial = ""
         askCapture = true                       // the camera loop takes the photo right away
         buzz(60); tone.startTone(ToneGenerator.TONE_PROP_BEEP2, 120)
-        ui.post { describeButton.text = "Listening…"; describeButton.alpha = 0.6f; setAnswer("…") }
+        ui.post { describeButton.text = "Listening…"; describeButton.alpha = 0.6f; setQuestion("…"); setAnswer("") }
         listening = true
         val r = recognizer ?: newRecognizer().also { recognizer = it }
         r.setRecognitionListener(listener)
@@ -566,6 +746,8 @@ class MainActivity : Activity() {
             .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 4000L)
             .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 4000L)
         captureReadEnd = startCapture(intent)
+        if (micMode() == "camera" && micUsed != "camera") event("mic", "phone mic: camera mic needs the " +
+            "Bluetooth link, firmware/xiao with the mic stream, and Android 13+")
         r.startListening(intent)
     }
 
@@ -606,7 +788,7 @@ class MainActivity : Activity() {
             b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let {
                 if (it.isNotBlank()) {
                     if (it != partial) { mark("first_partial", overwrite = false); mark("last_partial") }
-                    partial = it; ui.post { setAnswer("“$it”") }
+                    partial = it; ui.post { setQuestion(it) }
                 }
             }
         }
@@ -634,8 +816,18 @@ class MainActivity : Activity() {
         if (askCameraFailed) { say("Camera didn't answer. Try again.", "status"); doneLooking("Camera didn't answer."); return@post }
         val shot = askShot ?: return@post
         question = null
-        if (q.isBlank()) { say("Didn't catch the question.", "status"); doneLooking("Didn't catch the question."); return@post }
-        setAnswer("“$q”")
+        if (dryAsk) {
+            dryAsk = false
+            val m = synchronized(marks) { marks.entries.sortedBy { it.value }.joinToString { "${it.key} +${it.value - pressAt}" } }
+            event("dry_ask", "mic $micUsed, heard \"$q\", release to transcript ${sttAt - releaseAt} ms, " +
+                "photo ${"%.2f".format(shot.camS)} s ${shot.jpeg.size / 1024} KB; marks (ms after press): $m")
+            if (micUsed == "camera") saveQuestionAudio(shot.photo)?.let { event("dry_ask", "audio $it") }
+            setQuestion(q); doneLooking("Heard: $q")
+            return@post
+        }
+        if (q.isBlank()) { say("Didn't catch the question.", "status"); setQuestion(""); doneLooking("Didn't catch the question."); return@post }
+        setQuestion(q)
+        setAnswer("…")
         net.execute { answer(q, shot) }
     }
 
@@ -643,7 +835,7 @@ class MainActivity : Activity() {
         var heard = ""
         try {
             val jpeg = Brain.brighten(s.jpeg)
-            ui.post { BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size).let { lastPhoto = it; photoView.setImageBitmap(it) } }
+            ui.post { BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size).let { lastPhoto = it; photoView.setImageBitmap(it); photoView.visibility = View.VISIBLE } }
             mark("request_sent")
             val a = Brain.describe(jpeg, key, model, askPrompt.replace("{q}", q.replace("\"", "'")),
                 maxTokens = Models.maxTokens(200, effort()), reasoning = effort())
@@ -658,11 +850,11 @@ class MainActivity : Activity() {
             synchronized(marks) { marks.forEach { (k, v) -> m.put(k, iso.format(Date(v))) } }
             val wav = if (recordQuestionAudio) saveQuestionAudio(s.photo) else null
             logRow(JSONObject().put("photo", s.photo).put("mode", "ask").put("question", q)
-                .put("marks", m)
+                .put("mic", micUsed).put("marks", m)
                 .put("question_audio", wav ?: JSONObject.NULL)
                 .put("question_audio_start_at", if (wav != null) iso.format(Date(captureStartAt)) else JSONObject.NULL)
                 .put("press_at", at(pressAt)).put("release_at", at(releaseAt)).put("stt_at", at(sttAt))
-                .put("size", sizeOf(onceSize)).put("captured_at", iso.format(Date(s.t0)))
+                .put("size", board?.sizeLabel ?: sizeOf(onceSize)).put("captured_at", iso.format(Date(s.t0)))
                 .put("answered_at", iso.format(Date())).put("camera_s", s.camS).put("enhance", "auto")
                 .put("model_s", a.seconds).put("cost_usd", a.costUsd).put("status", "spoken")
                 .put("model", model).put("reasoning", effort()).put("tokens_in", a.tokensIn)
@@ -675,16 +867,19 @@ class MainActivity : Activity() {
             say("Couldn't reach the describer. Try again.", "status")
             show("model: ${e.message}")
         } finally {
-            doneLooking(if (heard.isEmpty()) "" else "Q: $q\n$heard")
+            doneLooking(heard)
         }
     }
 
     private fun requestDescribe() {
         if (looking) return
-        if (board == null) { say("Camera not connected.", "status"); connect(); return }
+        event("press", "describe" + if (board == null) " (camera not connected yet)" else "")
+        // A dropped link (board restarted, Bluetooth out of range) usually comes back within a few
+        // seconds; wait for it instead of failing the press.
+        if (board == null) { onceWaitUntil = System.currentTimeMillis() + 6000; connect() }
         looking = true
         buzz(30); tone.startTone(ToneGenerator.TONE_PROP_BEEP, 70)
-        ui.post { describeButton.text = "Looking…"; describeButton.alpha = 0.6f }
+        ui.post { describeButton.text = "Looking…"; describeButton.alpha = 0.6f; setQuestion(""); setAnswer("…") }
         once = true
     }
 
@@ -699,19 +894,48 @@ class MainActivity : Activity() {
         setAnswer(answer)
     }
 
+    private val eventStamp = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", Locale.US)
+
+    /** Everything that went right or wrong, kept on the phone (logcat is a ring buffer that
+     *  `adb logcat -c` or a busy phone wipes): files/events/<yyyyMMdd>.jsonl. */
+    @Synchronized
+    private fun event(kind: String, text: String) {
+        val now = Date()
+        val row = JSONObject().put("t", eventStamp.format(now)).put("kind", kind).put("text", text)
+            .put("link", linkMode()).put("camera", cameraLine())
+        runCatching {
+            val dir = getExternalFilesDir("events") ?: return
+            File(dir, SimpleDateFormat("yyyyMMdd", Locale.US).format(now) + ".jsonl").appendText(row.toString() + "\n")
+        }
+    }
+
     private fun show(msg: String) = ui.post {
+        android.util.Log.i("sense", msg)
+        event("log", msg)
         logText = (msg + "\n" + logText).take(4000)
         log.text = logText
     }
 
     private fun setAnswer(t: CharSequence) { answerText = t; answerView.text = t }
 
-    private fun setStatus(msg: String) = ui.post { statusText = msg; status.text = homeStatus() }
+    private fun setQuestion(t: CharSequence) {
+        questionText = t
+        questionView.text = t
+        questionView.visibility = if (t.isEmpty()) View.GONE else View.VISIBLE
+    }
+
+    private fun setStatus(msg: String) = ui.post {
+        android.util.Log.i("sense", "status: $msg")
+        if (msg != statusText) event("status", msg)
+        statusText = msg; status.text = homeStatus()
+    }
 
     private fun cameraLine() = when (val b = board) {
         is WifiBoard -> "Camera on Wi-Fi"
-        null -> "Camera not connected"
-        else -> "Camera on USB"
+        is BleBoard -> "XIAO on Bluetooth"
+        is GlassesCamera -> "Glasses on Bluetooth"
+        is Board -> "${b.name} on USB"
+        else -> "Camera not connected"
     }
 
     /** Short by default; the full last status message with developer details on. */
@@ -752,14 +976,113 @@ class MainActivity : Activity() {
         override fun onReceive(c: Context, i: Intent) = connect()
     }
 
+    private val usbDetached = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, i: Intent) {
+            if (port == null) return
+            serial?.close()
+            serial = null
+            runCatching { port?.close() }
+            port = null
+            board = null
+            setStatus("Board unplugged.")
+        }
+    }
+
     @Volatile private var connecting = false
+    @Volatile private var serial: Board? = null  // the USB link; in hotspot mode it only powers the board and tells its address
+
+    /** "usb": photos over the cable (board's Wi-Fi off). "wifi": photos over the phone's hotspot.
+     *  "ble": photos over Bluetooth (XIAO only). */
+    private fun linkMode() = prefs.getString("link", "usb")!!
+
+    /** Forget the board; a Bluetooth link is closed so the board advertises again. */
+    private fun dropBoard() {
+        (board as? BleBoard)?.close()
+        (board as? GlassesCamera)?.close()
+        board = null
+    }
+
+    /** The camera glasses over Bluetooth (docs/glasses.md): slower than a board, no cable or board. */
+    private fun connectGlasses() {
+        if (blePermissions.any { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) {
+            setStatus("Allow Nearby devices so the app can reach the glasses over Bluetooth.")
+            if (!askedBle) requestPermissions(blePermissions, 2)  // once: the loop retries every 4 s
+            askedBle = true
+            return
+        }
+        connecting = true
+        setStatus("Looking for the glasses over Bluetooth…")
+        Thread {
+            try {
+                val t = System.currentTimeMillis()
+                val g = GlassesCamera.connect(this, prefs.getString("glasses_address", null),
+                    highPriority = prefs.getBoolean("glasses_high_priority", true))
+                prefs.edit().putString("glasses_address", g.address).apply()
+                g.size = prefs.getInt("glasses_size", 1)
+                show("Glasses connected in ${System.currentTimeMillis() - t} ms")
+                board = g
+                setStatus("Glasses on Bluetooth (${g.sizeLabel}, MTU ${g.mtu}). ${spentText()}. Model: $model")
+            } catch (e: Exception) {
+                setStatus("Glasses: ${e.message}. Retrying…")
+            } finally {
+                connecting = false
+            }
+        }.start()
+    }
+
+    // The default prober knows the CH340 but not the XIAO's native USB (Espressif 303a:1001).
+    private val prober = UsbSerialProber(UsbSerialProber.getDefaultProbeTable()
+        .addProduct(XIAO_VID, 0x1001, CdcAcmSerialDriver::class.java))
+
+    private val blePermissions =
+        if (Build.VERSION.SDK_INT >= 31) arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
+        else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+
+    private var askedBle = false
+
+    private fun connectBle() {
+        if (blePermissions.any { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) {
+            setStatus("Allow Nearby devices so the app can find the XIAO over Bluetooth.")
+            if (!askedBle) requestPermissions(blePermissions, 2)  // once: the loop retries every 4 s
+            askedBle = true
+            return
+        }
+        connecting = true
+        setStatus("Looking for the XIAO over Bluetooth…")
+        Thread {
+            try {
+                val t = System.currentTimeMillis()
+                val b = BleBoard.connect(this, prefs.getString("ble_address", null))
+                prefs.edit().putString("ble_address", b.address).apply()
+                show("Bluetooth connected in ${System.currentTimeMillis() - t} ms")
+                b.send('o')  // Wi-Fi shares the radio and slows Bluetooth down
+                b.send(size); Thread.sleep(300)
+                runCatching { b.grab() }
+                boardSize = size
+                board = b
+                setStatus("XIAO on Bluetooth (MTU ${b.mtu}). ${spentText()}. Model: $model")
+            } catch (e: Exception) {
+                setStatus("Bluetooth: ${e.message}. Retrying…")
+            } finally {
+                connecting = false
+            }
+        }.start()
+    }
+
+    override fun onRequestPermissionsResult(code: Int, perms: Array<out String>, results: IntArray) {
+        super.onRequestPermissionsResult(code, perms, results)
+        if (code == 2) connect()
+    }
 
     private fun connect() {
         if (connecting || board != null) return
+        if (linkMode() == "ble") { connectBle(); return }
+        if (linkMode() == "glasses") { connectGlasses(); return }
         val manager = getSystemService(Context.USB_SERVICE) as UsbManager
-        val driver = UsbSerialProber.getDefaultProber().findAllDrivers(manager).firstOrNull()
+        val driver = prober.findAllDrivers(manager).firstOrNull()
         if (driver == null) {
-            if (boardIp.isNotEmpty()) { connectWifi(); return }
+            val ip = prefs.getString("board_ip", null) ?: boardIp
+            if (ip.isNotEmpty()) { connectWifi(ip); return }
             val any = manager.deviceList.values.joinToString { "%04x:%04x".format(it.vendorId, it.productId) }
             setStatus("Board not found (USB devices seen: ${any.ifEmpty { "none" }}). " +
                 "Needs a USB-C to micro-USB data cable or OTG adapter. Retrying…")
@@ -774,18 +1097,36 @@ class MainActivity : Activity() {
         connecting = true
         Thread {
             try {
-                val p = driver.ports[0]
-                p.open(manager.openDevice(driver.device))
-                p.setParameters(460800, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
-                p.dtr = false; p.rts = false
-                Thread.sleep(2500)  // opening the port can reset the board
-                val b = Board(p)
-                b.drain()
+                val mode = linkMode()
+                // Hotspot mode keeps the USB link open: reuse it (no restart) to look up the address again.
+                val b = serial?.takeIf { mode == "wifi" } ?: run {
+                    serial?.close()
+                    runCatching { port?.close() }  // Reconnect: the old port (and its reader) first
+                    port = null
+                    val p = driver.ports[0]
+                    p.open(manager.openDevice(driver.device))
+                    p.setParameters(460800, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+                    Board(p, driver.device.vendorId == XIAO_VID).also { show(it.restart()); port = p; serial = it }
+                }
+                if (mode == "wifi") {
+                    b.send('n')
+                    setStatus("Waiting for the board to join the phone's hotspot…")
+                    val ip = b.wifiIp(15000)
+                    if (ip == null) {
+                        setStatus("Board isn't on Wi-Fi. Is the phone's hotspot on? Retrying…")
+                        return@Thread
+                    }
+                    prefs.edit().putString("board_ip", ip).apply()
+                    connectWifiNow(ip)
+                    return@Thread
+                }
+                b.send('o')  // photos go over the cable: the board's Wi-Fi only costs power and heat
+                b.drain(100)
                 b.send(size); Thread.sleep(300); b.drain()
                 runCatching { b.grab() }
                 boardSize = size
-                port = p; board = b
-                setStatus("Board connected. ${spentText()}. Model: $model")
+                board = b
+                setStatus("${b.name} connected. ${spentText()}. Model: $model")
             } catch (e: Exception) {
                 setStatus("USB error: ${e.message}")
             } finally {
@@ -794,24 +1135,25 @@ class MainActivity : Activity() {
         }.start()
     }
 
-    /** No USB data (power-only cable): fetch photos from the board over the hotspot instead. */
-    private fun connectWifi() {
+    /** No USB data (power bank, or a power-only cable): photos from the board's last known address. */
+    private fun connectWifi(ip: String) {
         connecting = true
         Thread {
-            try {
-                val w = WifiBoard(boardIp)
-                w.setSize(wifiSizeName(size))
-                w.grab()
-                boardSize = size
-                board = w
-                setStatus("Board on Wi-Fi ($boardIp); USB is power only. " +
-                    "${spentText()}. Model: $model")
-            } catch (e: Exception) {
-                setStatus("No USB data and board not reachable at $boardIp (${e.message}). Retrying…")
-            } finally {
-                connecting = false
-            }
+            try { connectWifiNow(ip) } finally { connecting = false }
         }.start()
+    }
+
+    private fun connectWifiNow(ip: String) {
+        try {
+            val w = WifiBoard(ip)
+            w.setSize(wifiSizeName(size))
+            w.grab()
+            boardSize = size
+            board = w
+            setStatus("Board on Wi-Fi ($ip). ${spentText()}. Model: $model")
+        } catch (e: Exception) {
+            setStatus("Board not reachable at $ip (${e.message}). Retrying…")
+        }
     }
 
     // --- loop ------------------------------------------------------------------------------
@@ -830,6 +1172,8 @@ class MainActivity : Activity() {
         when (b) {
             is WifiBoard -> b.setSize(wifiSizeName(want))
             is Board -> { b.send(want); Thread.sleep(300); b.drain() }
+            is BleBoard -> b.send(want)  // the board handles letters in order: no need to wait
+            is GlassesCamera -> Unit     // own sizes: the "glasses_size" setting, not the boards' letters
         }
         boardSize = want
     }
@@ -847,12 +1191,27 @@ class MainActivity : Activity() {
 
     private fun loop() {
         var lastTry = 0L
-        while (true) {
-            if (board == null && System.currentTimeMillis() - lastTry > 4000) {
+        while (!isDestroyed) {
+            if (board == null && System.currentTimeMillis() - lastTry > (if (once) 500 else 4000)) {
                 lastTry = System.currentTimeMillis()
                 ui.post { connect() }
             }
+            (board as? BleBoard)?.takeIf { !it.connected }?.let {
+                dropBoard(); setStatus("Bluetooth ${it.error ?: "disconnected"}. Reconnecting…")
+            }
+            (board as? GlassesCamera)?.takeIf { !it.connected }?.let {
+                dropBoard(); setStatus("Glasses ${it.error ?: "disconnected"}. Reconnecting…")
+            }
             val b = board
+            if (benchCount > 0 && b != null) {
+                val n = benchCount
+                benchCount = 0
+                try { bench(b, n) } catch (e: Exception) {
+                    setStatus("bench failed: ${e.message?.take(80)}")
+                    if (b is BleBoard || b is GlassesCamera) dropBoard()
+                }
+                continue
+            }
             if (askCapture && b != null) {        // hold-to-ask: photo first, while the user speaks
                 askCapture = false
                 try {
@@ -870,6 +1229,7 @@ class MainActivity : Activity() {
                     show("camera: ${e.message}")
                     askCameraFailed = true
                     if (b is WifiBoard) board = null
+                    if (b is BleBoard || b is GlassesCamera) dropBoard()
                 }
                 tryAnswer()
                 continue
@@ -878,6 +1238,11 @@ class MainActivity : Activity() {
             val go = single || (live && !looking && readyForNext())
             if (b == null || !go || key.isEmpty()) {
                 if (single && key.isEmpty()) { once = false; doneLooking("No API key on the phone.") }
+                else if (single && b == null && System.currentTimeMillis() > onceWaitUntil) {
+                    once = false
+                    say("Camera not connected.", "status")
+                    doneLooking("Camera not connected. $statusText")
+                }
                 Thread.sleep(30); continue
             }
             once = false
@@ -895,6 +1260,7 @@ class MainActivity : Activity() {
                 show("camera: ${e.message}")
                 if (single) { say("Camera didn't answer. Try again.", "status"); doneLooking("Camera didn't answer.") }
                 if (b is WifiBoard) { board = null; Thread.sleep(1000) }  // reconnect
+                if (b is BleBoard || b is GlassesCamera) dropBoard()
                 continue
             }
             val camS = (System.currentTimeMillis() - t0) / 1000.0
@@ -912,7 +1278,7 @@ class MainActivity : Activity() {
         var heard = ""
         try {
             val jpeg = Brain.brighten(raw)
-            ui.post { BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size).let { lastPhoto = it; photoView.setImageBitmap(it) } }
+            ui.post { BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size).let { lastPhoto = it; photoView.setImageBitmap(it); photoView.visibility = View.VISIBLE } }
             val a = Brain.describe(jpeg, key, model, momentPrompt, maxTokens = Models.maxTokens(150, effort()), reasoning = effort())
             addSpent(a.costUsd)
             val now = System.currentTimeMillis()
@@ -920,7 +1286,7 @@ class MainActivity : Activity() {
             buzz(20)
             synchronized(this) { pendingSpeech = null; speaking = false }
             tts.speak(heard, TextToSpeech.QUEUE_FLUSH, null, "$capturedAt|$photo")
-            logRow(JSONObject().put("photo", photo).put("mode", "moment").put("size", sizeOf(onceSize))
+            logRow(JSONObject().put("photo", photo).put("mode", "moment").put("size", board?.sizeLabel ?: sizeOf(onceSize))
                 .put("captured_at", iso.format(Date(capturedAt))).put("answered_at", iso.format(Date(now)))
                 .put("camera_s", camS).put("enhance", "auto").put("model_s", a.seconds)
                 .put("model", model).put("reasoning", effort()).put("tokens_in", a.tokensIn)
@@ -929,7 +1295,7 @@ class MainActivity : Activity() {
                 .put("spoken_text", heard).put("prompt_file", momentPromptFile)
                 .put("device", "android").put("link", link))
             show("[once: cam ${"%.2f".format(camS)}s + model ${"%.2f".format(a.seconds)}s] $heard")
-            setStatus("${if (link == "wifi") "Camera on Wi-Fi" else "Camera on USB"} · ${spentText()}")
+            setStatus("${cameraLine()} · ${spentText()}")
         } catch (e: Exception) {
             heard = "Couldn't describe: ${e.message?.take(60)}"
             say("Couldn't reach the describer. Try again.", "status")
@@ -947,7 +1313,7 @@ class MainActivity : Activity() {
             val e0 = System.nanoTime()
             val jpeg = Brain.brighten(raw)
             val enhS = (System.nanoTime() - e0) / 1e9
-            ui.post { BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size).let { lastPhoto = it; photoView.setImageBitmap(it) } }
+            ui.post { BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size).let { lastPhoto = it; photoView.setImageBitmap(it); photoView.visibility = View.VISIBLE } }
             val a = Brain.describe(jpeg, key, model)
             addSpent(a.costUsd)
             val now = System.currentTimeMillis()
@@ -1013,7 +1379,10 @@ class MainActivity : Activity() {
         say(text, id)
     }
 
-    private fun say(text: String, id: String) = tts.speak(text, TextToSpeech.QUEUE_ADD, null, id)
+    private fun say(text: String, id: String): Int {
+        if (id == "status") event("said", text)
+        return tts.speak(text, TextToSpeech.QUEUE_ADD, null, id)
+    }
 
     @Synchronized
     private fun logRow(row: JSONObject) {
@@ -1023,5 +1392,6 @@ class MainActivity : Activity() {
 
     companion object {
         private const val ACTION_USB = "com.sense.app.USB_PERMISSION"
+        private const val XIAO_VID = 0x303A
     }
 }

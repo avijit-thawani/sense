@@ -97,7 +97,7 @@ send the audio itself plus a photo to the model with `prompts/ask_app_v1.txt` (n
 | Volume levels | `51: 01` | works (music 7/16, call 12/16, system 12/16) |
 | Stored photo/video counts | `41: 02 04` | works |
 | Video recording | `41: 02 01 02` / `02 01 03` | works (video count 0 → 1) |
-| Glasses' Wi-Fi on/off | `41: 02 01 04 02` / `02 01 09` | works: returns network `M08T_<mac>`, password `123456789`; download not yet tried by us |
+| Glasses' Wi-Fi on/off | `41: 02 01 04 02` / `02 01 09` | works: returns network `M08T_<mac>`, password `123456789`; stored photos download over it (see below) |
 | Find device | `41: 02 01 0d` | accepted; nobody checked for a sound |
 | Talk button | event `03` start, `0a` end (glasses end it after silence) | works |
 | Mic audio | `59` packets, 40-byte Opus frames | decoded, sent to the model |
@@ -108,6 +108,44 @@ send the audio itself plus a photo to the model with `prompts/ask_app_v1.txt` (n
 
 Button events only arrive after the vendor app's connect sequence (`Glasses.handshake()`: clock,
 info, classic-Bluetooth check, battery, volume) and a heartbeat (`45: 04 01`) every 5 s.
+
+## From the phone app (Nov 16 2026)
+
+`GlassesCamera.kt` is `tools/glasses.py` in Kotlin: Settings → Camera → Photos over → *Glasses*.
+Photo test (`--ei bench 5`, no model calls) on a Pixel 9a, medians of 5, trigger to JPEG:
+
+| Size byte | Size | Bytes | Trigger to JPEG | Photo ready | Chunks |
+|---|---|---|---|---|---|
+| 0 | 160×90 | 3.6 KB | 1.8 s | 1.3 s | 4, 95–150 ms each |
+| 1 | 320×180 | 9.2 KB | 2.5 s | 1.3 s | 10, 95–150 ms each |
+
+- Size byte 0 is 160×90, not 256×144 (the 256 + 64·N rule starts at N = 1).
+- No stalls in 19 photos. From the Mac the same evening, 2 of 3 runs had a chunk reply that
+  came seconds late or never; the phone asks again after 0.7 s and never needed to.
+- `CONNECTION_PRIORITY_HIGH` changes nothing (1.82 vs 1.80 s, 2.56 vs 2.50 s): the glasses set
+  the pace. MTU 517. Connecting takes 2.4 s.
+- The camera's 1.3 s is now most of the time; a smaller photo can't buy much more.
+- Not tested: a describe or ask through this camera, whether 160×90 is enough for the model,
+  the glasses' buttons as the trigger, a long idle (no heartbeat is sent).
+
+## Photos over the glasses' own Wi-Fi (Nov 16 2026)
+
+Found by reading the vendor app's strings (HTTP on port 80, RTSP `:8554/ch0` and `/ch4`,
+Wi-Fi Direct plus a hotspot mode), then tried with `tools/glasses_wifi.py`.
+
+1. `glasses_wifi.py on 150`: Wi-Fi on over Bluetooth, and keep the Bluetooth session open. The
+   network went away both times the session ended, and stayed up while it was held.
+2. Join `M08T_<mac>`; the glasses are `192.168.31.1` and hand out `192.168.31.100`.
+3. `GET /files/media.config`: the stored photo and video names, one per line.
+4. `GET /files/<name>`: the file. A 3200×2400 JPEG (418 KB) took 0.31, 0.48 and 0.75 s.
+
+- That was a photo stored days earlier. Not tested: take a photo, then fetch it (the camera's
+  1.3 s and the time to save come on top).
+- Starting the Wi-Fi and joining takes about 10 s, so it only helps if the Wi-Fi stays on.
+- Port 8554 was closed in this mode; the live stream probably needs its own command.
+- From an Android phone the traffic goes to mobile data unless the app binds to this network
+  (it has no internet); for the test, mobile data was switched off.
+- The glasses show no USB device to a Mac over their charging cable.
 
 ## Protocol
 

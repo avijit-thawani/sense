@@ -73,13 +73,19 @@ cost). [docs/evals.md](docs/evals.md)
 video, without walking again. [Hold-to-ask video with sound](docs/media/phone-ask.mp4) (1:06, 8
 questions); [the first walk](docs/media/phone-walk.mp4) (live mode).
 
-## Where it stands (Oct 30 2026)
+## Where it stands (Nov 1 2026)
+
+Plan in two tracks (software on today's rig, wearable hardware in steps): [docs/roadmap.md](docs/roadmap.md).
+What testers said: [docs/feedback.md](docs/feedback.md).
 
 - [x] Board over USB and Wi-Fi; laptop loop; Android app with Describe, hold to ask, History, Settings.
+- [x] Board on a USB cable straight to the phone (no hotspot): 6/6 taps, ~2.1 s to the first word.
 - [x] Evals: public samples, our moments set, prompt hill-climbing, model benchmark.
 - [ ] Reproduce in India: same kit and steps with a collaborator ([GETTING_STARTED.md](GETTING_STARTED.md)).
 - [x] HeyCyan-family glasses from a Mac: photos, buttons, mic and speakers with our own code; timed.
-- [ ] Glasses: faster photos (phone mic during ask, the glasses' Wi-Fi), then into the Android app.
+- [ ] Software on today's rig: sounds and vibrations, find mode, obstacle beeps, reading text.
+- [ ] XIAO ESP32S3 Sense: mic, photo over Bluetooth to the phone (target under 0.5 s), battery draw.
+- [ ] Clip-on with battery and Bluetooth; audio through bone-conduction headphones.
 - [ ] Test with blind and low-vision interns.
 
 What we learned (prompts, hallucinations, speed, light, Wi-Fi): [docs/findings.md](docs/findings.md).
