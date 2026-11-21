@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sighted</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  /* The slides are the images make_pdf.py draws (slides/NN.png). This page only shows them and adds
+     what a PDF cannot: the recorded sound, and the EchoVision clip on the "wait" slide. */
+  @font-face { font-family: "Atkinson Hyperlegible Next"; src: url("fonts/AHN.ttf"); font-weight: 200 800; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: #fff; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  .stage { position: relative; width: min(100vw, 177.78vh); aspect-ratio: 16 / 9; font-size: calc(min(100vw, 177.78vh) / 64); }
+  .stage img { position: absolute; inset: 0; width: 100%; height: 100%; display: none; }
+  .stage img.on { display: block; }
+  video { position: absolute; inset: 0; width: 100%; height: 100%; background: #fff; display: none; }
+  video.on { display: block; }
+  button { position: absolute; right: 2em; bottom: 1.6em; font: 500 1em "Atkinson Hyperlegible Next", sans-serif;
+    color: #111411; background: #5dff8f; border: 0; padding: 0.6em 1.1em; cursor: pointer; }
+  button:focus-visible { outline: 0.15em solid #111411; outline-offset: 0.15em; }
+  ::selection { background: #5dff8f; color: #111411; }
+</style>
+</head>
+<body>
+<div class="stage" id="stage">
+  <video id="clip" playsinline></video>
+  <button id="play"></button>
+</div>
+
+<script src="slides/manifest.js"></script>
+<script>
+  // Arrows, space or a click change slide. P or the green button plays that slide's recording:
+  // on the "wait" slide, the EchoVision clip first, then our own question and answer with its real gap.
+  const play = document.getElementById('play'), clip = document.getElementById('clip');
+  const slides = window.SLIDES.map(s => {          // slides/manifest.js is written by make_pdf.py
+    const img = new Image();
+    img.src = s.src; img.alt = s.alt;
+    for (const k of ['audio', 'video', 'label']) if (s[k]) img.dataset[k] = s[k];
+    return document.getElementById('stage').insertBefore(img, clip);
+  });
+  let at = 0, audio = null, queue = [];
+
+  function stop() {
+    queue = [];
+    if (audio) { audio.pause(); audio = null; }
+    clip.pause(); clip.classList.remove('on');
+    play.textContent = slides[at].dataset.label || '';
+  }
+  function next() {
+    const item = queue.shift();
+    clip.classList.remove('on');
+    if (!item) { stop(); return; }
+    if (item.video) {
+      clip.src = 'media/' + item.video + '.mp4'; clip.classList.add('on');
+      clip.onended = next; clip.play().catch(next);      // the clip is not in the public repo: skip it if missing
+    } else {
+      audio = new Audio('media/' + item.audio + '.wav');
+      audio.onended = () => { audio = null; next(); };
+      audio.play().catch(stop);
+    }
+  }
+  function hear() {
+    const s = slides[at].dataset;
+    if (audio || clip.classList.contains('on')) { stop(); return; }
+    queue = [];
+    if (s.video) queue.push({ video: s.video });
+    (s.audio || '').split(' ').filter(Boolean).forEach(a => queue.push({ audio: a }));
+    if (!queue.length) return;
+    play.textContent = 'Stop'; next();
+  }
+  function show(i) {
+    at = Math.max(0, Math.min(slides.length - 1, i));
+    slides.forEach((s, n) => s.classList.toggle('on', n === at));
+    stop();
+    play.style.display = slides[at].dataset.label ? '' : 'none';
+    history.replaceState(null, '', '#' + (at + 1));
+  }
+
+  play.addEventListener('click', e => { e.stopPropagation(); hear(); });
+  document.getElementById('stage').addEventListener('click', e => show(at + (e.clientX < innerWidth / 3 ? -1 : 1)));
+  addEventListener('keydown', e => {
+    if (['ArrowRight', 'ArrowDown', 'PageDown', ' ', 'Enter'].includes(e.key)) { e.preventDefault(); show(at + 1); }
+    else if (['ArrowLeft', 'ArrowUp', 'PageUp', 'Backspace'].includes(e.key)) { e.preventDefault(); show(at - 1); }
+    else if (e.key === 'p' || e.key === 'P') hear();
+    else if (e.key === 'f' || e.key === 'F') document.documentElement.requestFullscreen?.();
+  });
+  show((parseInt(location.hash.slice(1)) || 1) - 1);
+</script>
+</body>
+</html>

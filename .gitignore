@@ -20,3 +20,16 @@ __pycache__/
 *.judge.json
 !docs/media/*.judge.json
 data/
+lit review/
+# worn-hackathon/: only the app, the deck and the demo video are public. Everything else there stays
+# local (sdk/ is the vendor's confidential kit; notes/ has photos of other people).
+worn-hackathon/*
+!worn-hackathon/app/
+!worn-hackathon/deck/
+!worn-hackathon/sense-glasses-demo.mp4
+worn-hackathon/app/glasstest/.gradle/
+worn-hackathon/app/glasstest/.kotlin/
+worn-hackathon/app/glasstest/local.properties
+worn-hackathon/app/glasstest/app/build/
+# A clip cut from someone else's Zoom recording (the EchoVision demo): not ours to publish.
+worn-hackathon/deck/media/echovision_ask.mp4
