@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <application android:label="GlassTest" android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
+        <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="landscape">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <!-- Second icon in the glasses' app list: opens straight into the sound-direction demo. -->
+        <activity-alias android:name=".SoundDemo" android:targetActivity=".MainActivity"
+            android:label="Sound Demo" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <!-- Minimal sense: tap, photo, model over Wi-Fi, answer on the display. -->
+        <activity android:name=".Sense" android:label="Sense" android:exported="true"
+            android:screenOrientation="landscape">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <!-- No-laptop start (Untethered.kt): Android reconnects this at every boot once sense-demo.sh has enabled it. -->
+        <service android:name=".OpenService" android:exported="true" android:label="Sense"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data android:name="android.accessibilityservice" android:resource="@xml/open_service" />
+        </service>
+        <service android:name=".KeepAliveService" android:exported="false" />
+        <receiver android:name=".Boot" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="com.sense.glasstest.START" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

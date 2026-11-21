@@ -1,0 +1,23 @@
+<!doctype html>
+<!-- A big running clock for the frame-lag test (Lag.kt): this computer's time as the last two
+     digits of the seconds, then milliseconds. Film it with the glasses; the clock visible in a
+     frame, compared with the time the frame reached our code, is the lag. -->
+<meta charset="utf-8">
+<title>lag clock</title>
+<style>
+  html, body { height: 100%; margin: 0; background: #000; color: #fff; overflow: hidden; }
+  body { display: flex; flex-direction: column; align-items: center; justify-content: center; font-family: Menlo, monospace; }
+  #t { font-size: 24vw; font-weight: bold; line-height: 1; font-variant-numeric: tabular-nums; }
+  #note { font: 2.5vw Helvetica, sans-serif; color: #888; margin-bottom: 2vh; }
+</style>
+<div id="note">LOOK AT THIS CLOCK THROUGH THE GLASSES</div>
+<div id="t"></div>
+<script>
+  const t = document.getElementById("t");
+  function tick() {
+    const ms = Date.now() % 100000;
+    t.textContent = String(Math.floor(ms / 1000)).padStart(2, "0") + "." + String(ms % 1000).padStart(3, "0");
+    requestAnimationFrame(tick);
+  }
+  tick();
+</script>
