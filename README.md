@@ -139,6 +139,12 @@ Only added to when the owner asks.
     camera lost.
   - Test with TalkBack and Accessibility Scanner, and with real blind and low-vision testers.
 
+## License
+
+© 2026 Avijit Thawani. [CC BY-NC 4.0](LICENSE): use and adapt with credit, not for commercial
+purposes. Not covered, because they belong to others: the font in `worn-hackathon/deck/fonts/`
+(its own licence is beside it) and the public-dataset photos shown in the deck.
+
 ## Rules for agents helping here
 
 - **Setup and day-to-day commands live in [GETTING_STARTED.md](GETTING_STARTED.md) and
